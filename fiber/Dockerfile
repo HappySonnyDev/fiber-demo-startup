@@ -10,7 +10,7 @@ RUN curl https://sh.rustup.rs -sSf | sh -s -- -y
 RUN cd /root && git clone --recursive https://github.com/Officeyutong/fiber && \
     cd fiber && git checkout fiber-demo-support
 
-RUN cd /root/fiber && /root/.cargo/bin/cargo build --release
+RUN cd /root/fiber && CARGO_BUILD_JOBS=2 /root/.cargo/bin/cargo build --release
 
 # Runtime stage - slim image with only runtime dependencies
 FROM debian:12-slim

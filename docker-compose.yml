@@ -4,6 +4,8 @@ x-proxy_settings: &preset
     - HTTPS_PROXY=
     - http_proxy=
     - https_proxy=
+    - NO_PROXY=
+    - no_proxy=
   
 
 services:
@@ -20,6 +22,8 @@ services:
       start_period: 20s
     ports:
       - 8114:8114
+    networks:
+      - fiber_net
     <<: *preset
   fiber-bootnode:
     build:
@@ -45,6 +49,9 @@ services:
     depends_on:
       ckb:
         condition: service_healthy
+    networks:
+      fiber_net:
+        ipv4_address: 172.21.0.10
     <<: *preset
   fiber-node1:
     build:
@@ -72,6 +79,9 @@ services:
       - ./fiber/nodes/node1/dev.toml:/dev.toml:ro
       - ./fiber/nodes/node1/fiber/sk:/fiber/sk:ro
       - ./fiber/nodes/node1/store:/store
+    networks:
+      fiber_net:
+        ipv4_address: 172.21.0.11
     <<: *preset
   fiber-node2:
     build:
@@ -99,6 +109,9 @@ services:
       - ./fiber/nodes/node2/dev.toml:/dev.toml:ro
       - ./fiber/nodes/node2/fiber/sk:/fiber/sk:ro
       - ./fiber/nodes/node2/store:/store
+    networks:
+      fiber_net:
+        ipv4_address: 172.21.0.12
     <<: *preset
   fiber-node3:
     build:
@@ -126,6 +139,9 @@ services:
       - ./fiber/nodes/node3/dev.toml:/dev.toml:ro
       - ./fiber/nodes/node3/fiber/sk:/fiber/sk:ro
       - ./fiber/nodes/node3/store:/store
+    networks:
+      fiber_net:
+        ipv4_address: 172.21.0.13
     <<: *preset
   fiber-web:
     build:
@@ -137,6 +153,8 @@ services:
     depends_on:
       fiber-bootnode:
         condition: service_healthy
+    networks:
+      - fiber_net
     <<: *preset
   transfer:
     build:
@@ -146,4 +164,13 @@ services:
     depends_on:
       ckb:
         condition: service_healthy
+    networks:
+      - fiber_net
     <<: *preset
+
+networks:
+  fiber_net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.21.0.0/16

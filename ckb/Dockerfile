@@ -7,7 +7,7 @@ RUN curl https://sh.rustup.rs -sSf | sh -s -- -y
 
 RUN cd /root && git clone --recursive https://github.com/nervosnetwork/ckb
 
-RUN cd /root/ckb && /root/.cargo/bin/cargo build --release && cp target/release/ckb /
+RUN cd /root/ckb && CARGO_BUILD_JOBS=2 /root/.cargo/bin/cargo build --release && cp target/release/ckb /
 
 COPY ./dev.toml /
 COPY ./contracts /contracts
