@@ -1,10 +1,16 @@
 "use client"
 import React, { useState, useEffect, useRef, useCallback } from 'react';
+import NextLink from 'next/link';
 import { 
-  Zap, Play, Square,
+  Zap, Play,
   Plus, Box, Activity,
-  Store, RefreshCw, X, Link, Unlink
+  Store, RefreshCw, X, Link, Unlink, ChevronDown, ChevronRight
 } from 'lucide-react';
+import { RPC_SCHEMA } from '@/lib/fiber-rpc-schema';
+import type { RpcTrace } from '@/lib/fiber-client';
+import QuickStart from '@/components/QuickStart';
+import { useI18n } from '@/lib/i18n';
+import LanguageSwitcher from '@/components/LanguageSwitcher';
 
 // --- 类型定义 ---
 type NodeType = 'l1' | 'user' | 'router' | 'merchant';
@@ -39,12 +45,22 @@ interface LogEntry {
   payload: string | Record<string, unknown>;
 }
 
+// RPC Inspector 数据结构
+interface RpcTraceEntry {
+  id: string;
+  timestamp: string;
+  operation: string;
+  traces: RpcTrace[];
+  status: 'success' | 'error';
+}
+
 interface ApiNodeInfo {
   name: string;
   role: string;
   rpcUrl: string;
   isOnline: boolean;
   ckbBalance: number;
+  udtBalance: number;
   info: {
     node_id?: string;
     version?: string;
@@ -60,6 +76,18 @@ interface ChannelInfo {
   local_balance?: string;
   remote_balance?: string;
   state?: { state_name?: string };
+  funding_udt_type_script?: {
+    code_hash: string;
+    hash_type: string;
+    args: string;
+  } | null;
+}
+
+// 通道连线信息
+interface ChannelLineInfo {
+  hasChannel: boolean;
+  isUdt: boolean;
+  isReady: boolean;
 }
 
 // --- 初始节点配置 ---
@@ -79,7 +107,11 @@ const NODE_POSITIONS: Record<string, { x: number; y: number }> = {
   charlie: { x: 400, y: 500 },
 };
 
+type AppMode = 'home' | 'quickstart' | 'demo';
+
 export default function App() {
+  const { t } = useI18n();
+  const [mode, setMode] = useState<AppMode>('home');
   const [hasNetwork, setHasNetwork] = useState(false);
   const [nodes, setNodes] = useState<NodesState>({});
   const [isRunning, setIsRunning] = useState(false);
@@ -97,16 +129,25 @@ export default function App() {
   const [selectedNode, setSelectedNode] = useState<string | null>(null);
   const [openChannelTarget, setOpenChannelTarget] = useState<string>('');
   const [openChannelAmount, setOpenChannelAmount] = useState<string>('100000000000');
+  const [openChannelAssetType, setOpenChannelAssetType] = useState<'CKB' | 'UDT'>('CKB');
   const [isOpeningChannel, setIsOpeningChannel] = useState(false);
+  
+  // 正在等待确认的通道（格式：`${fromNode}-${toNode}`）
+  const [pendingChannels, setPendingChannels] = useState<Set<string>>(new Set());
 
   // 支付相关
   const [paymentState, setPaymentState] = useState('idle');
   const [invoice, setInvoice] = useState('');
-  const [assetType, setAssetType] = useState('CKB');
+  const [assetType, setAssetType] = useState<'CKB' | 'UDT'>('CKB');
   const [payAmount, setPayAmount] = useState(100);
   const [payTarget, setPayTarget] = useState<string>('');
 
   const [activeTab, setActiveTab] = useState('Output');
+  
+  // RPC Inspector 状态
+  const [rpcHistory, setRpcHistory] = useState<RpcTraceEntry[]>([]);
+  const [selectedRpcEntry, setSelectedRpcEntry] = useState<string | null>(null);
+  const [expandedTraces, setExpandedTraces] = useState<Record<string, boolean>>({});
   
   const logsEndRef = useRef<HTMLDivElement>(null);
   const pollIntervalRef = useRef<NodeJS.Timeout | null>(null);
@@ -115,10 +156,9 @@ export default function App() {
     setIsClient(true);
     const now = new Date().toTimeString().split(' ')[0];
     setLogs([
-      { time: now, type: 'sys', node: 'System', method: 'init', payload: 'Fiber Network UI initialized.' },
-      { time: now, type: 'sys', node: 'System', method: 'ready', payload: 'Waiting to create a new network workspace...' }
-    ]);
-  }, []);
+      { time: now, type: 'sys', node: 'System', method: 'init', payload: t('log.init') },
+    ])
+  }, [t]);
 
   useEffect(() => {
     logsEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -129,19 +169,44 @@ export default function App() {
     setLogs(prev => [...prev, { time, type, node, method, payload }]);
   };
 
-  // 判断两节点之间是否有通道
-  const hasChannelBetween = useCallback((nodeA: string, nodeB: string): boolean => {
+  const addRpcEntry = (operation: string, traces: RpcTrace[], status: 'success' | 'error') => {
+    const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+    const timestamp = new Date().toTimeString().split(' ')[0];
+    const entry: RpcTraceEntry = { id, timestamp, operation, traces, status };
+    setRpcHistory(prev => [entry, ...prev].slice(0, 50));
+    setSelectedRpcEntry(id);
+    // 默认展开第一个 trace
+    if (traces.length > 0) {
+      setExpandedTraces(prev => ({ ...prev, [`${id}-0`]: true }));
+    }
+  };
+
+  // 获取两节点之间的通道信息
+  const getChannelInfoBetween = useCallback((nodeA: string, nodeB: string): ChannelLineInfo => {
     const aChannels = channels[nodeA] || [];
     const bChannels = channels[nodeB] || [];
-    if (aChannels.length === 0 || bChannels.length === 0) return false;
+    if (aChannels.length === 0 || bChannels.length === 0) return { hasChannel: false, isUdt: false, isReady: false };
 
-    // 精确匹配：nodeA 的通道 peer_id === nodeB 的 peer_id（从 addresses 提取的 multihash）
+    // 精确匹配：nodeA 的通道 peer_id === nodeB 的 peer_id
     const bId = nodeIdMap[nodeB];
     const aId = nodeIdMap[nodeA];
-    if (bId && aChannels.some(ch => ch.peer_id === bId)) return true;
-    if (aId && bChannels.some(ch => ch.peer_id === aId)) return true;
-
-    return false;
+    
+    // 查找 nodeA 的通道中与 nodeB 相连的
+    let targetChannel: ChannelInfo | null = null;
+    if (bId) {
+      targetChannel = aChannels.find(ch => ch.peer_id === bId) || null;
+    }
+    if (!targetChannel && aId) {
+      targetChannel = bChannels.find(ch => ch.peer_id === aId) || null;
+    }
+    
+    if (!targetChannel) return { hasChannel: false, isUdt: false, isReady: false };
+    
+    const isUdt = !!targetChannel.funding_udt_type_script;
+    const stateName = targetChannel.state?.state_name;
+    const isReady = stateName === 'CHANNEL_READY';
+    
+    return { hasChannel: true, isUdt, isReady };
   }, [channels, nodeIdMap]);
 
   // 获取节点状态
@@ -188,6 +253,7 @@ export default function App() {
                 isOnline: status.isOnline,
                 version: status.info?.version || updated[nodeKey]!.version,
                 ckb: status.ckbBalance ?? updated[nodeKey]!.ckb,
+                udt: status.udtBalance ?? updated[nodeKey]!.udt,
               };
             }
           });
@@ -240,7 +306,37 @@ export default function App() {
     addLog('sys', 'System', 'create', 'Initializing new workspace configuration...');
     setHasNetwork(true);
     setNodes(INITIAL_NODES);
-    addLog('sys', 'System', 'ready', 'Network topology created. Click "Start" to connect and boot nodes.');
+  };
+
+  const handleEnterDemo = () => {
+    setMode('demo');
+    setHasNetwork(true);
+    setNodes(INITIAL_NODES);
+    // 自动启动连接
+    setIsConnecting(true);
+    addLog('sys', 'System', 'connect', 'Connecting to Fiber nodes...');
+    fetch('/api/nodes').then(r => r.json()).then(data => {
+      const allOnline = data.nodes?.every((n: ApiNodeInfo) => n.isOnline) ?? false;
+      const statusMap: Record<string, ApiNodeInfo> = {};
+      data.nodes?.forEach((n: ApiNodeInfo) => { statusMap[n.name] = n; });
+      setNodeStatus(statusMap);
+      if (allOnline) {
+        setIsRunning(true);
+        startPolling();
+        fetchChannels();
+        addLog('sys', 'System', 'ready', 'All nodes connected. Channels loaded.');
+      } else {
+        addLog('sys', 'System', 'error', 'Some nodes are offline. Please check Docker.');
+      }
+    }).catch((error: unknown) => {
+      addLog('sys', 'System', 'error', error instanceof Error ? error.message : 'Connection failed');
+    }).finally(() => {
+      setIsConnecting(false);
+    });
+  };
+
+  const handleEnterQuickStart = () => {
+    setMode('quickstart');
   };
 
   const handleStartNetwork = async () => {
@@ -280,21 +376,52 @@ export default function App() {
   };
 
   // 建立通道
-  const handleOpenChannel = async (fromNode: string, toNode: string, amount: string) => {
-    addLog('req', fromNode, 'open_channel', { to: toNode, amount });
+  const handleOpenChannel = async (fromNode: string, toNode: string, amount: string, assetType: 'CKB' | 'UDT' = 'CKB') => {
+    addLog('req', fromNode, 'open_channel', { to: toNode, amount, assetType });
     setIsOpeningChannel(true);
+    const channelKey = `${fromNode}-${toNode}`;
+    
     try {
       const response = await fetch('/api/channels/open', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ fromNode, toNode, fundingAmount: amount }),
+        body: JSON.stringify({ fromNode, toNode, fundingAmount: amount, assetType }),
       });
       const data = await response.json();
+      if (data.rpcTrace) {
+        addRpcEntry(`建立通道 ${fromNode} → ${toNode} [${assetType}]`, data.rpcTrace, data.success ? 'success' : 'error');
+      }
       if (data.success) {
-        addLog('res', fromNode, 'open_channel', { success: true, peerId: data.peerId });
+        addLog('res', fromNode, 'open_channel', { success: true, peerId: data.peerId, assetType: data.assetType });
+        // 标记通道为等待确认状态
+        setPendingChannels(prev => new Set(prev).add(channelKey));
+        
         // 通道需要等 CKB 出块才会 CHANNEL_READY，轮询多次刷新
-        [3000, 8000, 15000, 25000].forEach(delay => {
-          setTimeout(() => { fetchChannels(); fetchNodeStatus(); }, delay);
+        const checkDelays = [3000, 6000, 10000, 15000, 22000, 30000];
+        checkDelays.forEach((delay, idx) => {
+          setTimeout(async () => {
+            await fetchChannels();
+            await fetchNodeStatus();
+            
+            // 检查通道是否已就绪
+            const info = getChannelInfoBetween(fromNode, toNode);
+            if (info.hasChannel && info.isReady) {
+              // 通道已就绪，移除等待状态
+              setPendingChannels(prev => {
+                const next = new Set(prev);
+                next.delete(channelKey);
+                return next;
+              });
+              addLog('sys', 'System', 'channel_ready', `${fromNode} → ${toNode} 通道已就绪`);
+            } else if (idx === checkDelays.length - 1) {
+              // 最后一次检查仍未就绪，也移除等待状态（可能需要更长时间）
+              setPendingChannels(prev => {
+                const next = new Set(prev);
+                next.delete(channelKey);
+                return next;
+              });
+            }
+          }, delay);
         });
       } else {
         throw new Error(data.error);
@@ -316,6 +443,9 @@ export default function App() {
         body: JSON.stringify({ nodeName, channelId }),
       });
       const data = await response.json();
+      if (data.rpcTrace) {
+        addRpcEntry(`关闭通道 ${nodeName} [${channelId.substring(0, 10)}...]`, data.rpcTrace, data.success ? 'success' : 'error');
+      }
       if (data.success) {
         addLog('res', nodeName, 'close_channel', { success: true });
         setTimeout(() => { fetchChannels(); fetchNodeStatus(); }, 2000);
@@ -336,14 +466,25 @@ export default function App() {
       const response = await fetch('/api/invoice', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ nodeName: payTarget, amount: payAmount.toString(), description: '支付请求' }),
+        body: JSON.stringify({ 
+          nodeName: payTarget, 
+          amount: payAmount.toString(), 
+          description: '支付请求',
+          assetType: assetType // 传递资产类型
+        }),
       });
       const data = await response.json();
       if (data.success) {
         setInvoice(data.invoice);
-        addLog('res', payTarget, 'new_invoice', { invoice: data.invoice.substring(0, 50) + '...' });
+        addLog('res', payTarget, 'new_invoice', { invoice: data.invoice.substring(0, 50) + '...', assetType: data.assetType });
+        if (data.rpcTrace) {
+          addRpcEntry(`生成发票 ${payTarget} [${assetType}] ${payAmount}`, data.rpcTrace, 'success');
+        }
         setPaymentState('created');
       } else {
+        if (data.rpcTrace) {
+          addRpcEntry(`生成发票 ${payTarget} [${assetType}]`, data.rpcTrace, 'error');
+        }
         throw new Error(data.error || 'Failed to create invoice');
       }
     } catch (error) {
@@ -369,6 +510,9 @@ export default function App() {
       const data = await response.json();
       if (data.success) {
         addLog('res', selectedNode, 'send_payment', { status: 'success', result: data.result });
+        if (data.rpcTrace) {
+          addRpcEntry(`支付 ${selectedNode} → ${payTarget} [${assetType}] ${payAmount}`, data.rpcTrace, 'success');
+        }
         setPaymentState('success');
         // 刷新通道余额 - 支付是链下操作，只更新通道内余额
         setTimeout(() => { 
@@ -377,6 +521,9 @@ export default function App() {
         }, 1000);
         setTimeout(() => { setPaymentState('idle'); setInvoice(''); }, 3000);
       } else {
+        if (data.rpcTrace) {
+          addRpcEntry(`支付 ${selectedNode} → ${payTarget}`, data.rpcTrace, 'error');
+        }
         throw new Error(data.error || 'Payment failed');
       }
     } catch (error) {
@@ -385,8 +532,13 @@ export default function App() {
     }
   };
 
-  // 根据 node_id 查找节点名称
+  // 根据 peer_id 查找节点名称
   const findNodeNameByPeerId = (peerId: string): string => {
+    // 优先从 nodeIdMap 查找（从 addresses 提取的 multihash）
+    for (const [name, id] of Object.entries(nodeIdMap)) {
+      if (id === peerId) return name;
+    }
+    // fallback: 从 nodeStatus 的 node_id 查找
     for (const name of FIBER_NODES) {
       if (nodeStatus[name]?.info?.node_id === peerId) return name;
     }
@@ -417,7 +569,7 @@ export default function App() {
           <div className="mb-2 text-[#444]">
             <Link className="w-8 h-8 mx-auto mb-3 opacity-40" />
           </div>
-          点击右侧图中的节点<br/>进行操作
+          {t('demo.sidebar.selectNodeHint')}
         </div>
       );
     }
@@ -445,7 +597,7 @@ export default function App() {
         {/* 建立通道 */}
         <div className="bg-[#252526] p-3 rounded-lg border border-[#3e3e42]">
           <label className="text-xs text-[#888] block mb-2 flex items-center gap-1">
-            <Link className="w-3 h-3" /> 建立通道
+            <Link className="w-3 h-3" /> {t('channel.open.title')}
           </label>
           <div className="flex gap-1 mb-2">
             {others.map(n => (
@@ -462,8 +614,25 @@ export default function App() {
               </button>
             ))}
           </div>
+          {/* 资产类型选择 */}
+          <div className="flex gap-1 mb-2">
+            <button
+              onClick={() => { setOpenChannelAssetType('CKB'); setOpenChannelAmount('100000000000'); }}
+              className={`flex-1 py-1 text-[10px] rounded border ${openChannelAssetType === 'CKB' ? 'border-orange-500 text-orange-400 bg-orange-500/10' : 'border-[#3e3e42] text-[#888] hover:bg-[#2d2d2d]'}`}
+            >
+              {t('channel.asset.ckb')}
+            </button>
+            <button
+              onClick={() => { setOpenChannelAssetType('UDT'); setOpenChannelAmount('100000000'); }}
+              className={`flex-1 py-1 text-[10px] rounded border ${openChannelAssetType === 'UDT' ? 'border-purple-500 text-purple-400 bg-purple-500/10' : 'border-[#3e3e42] text-[#888] hover:bg-[#2d2d2d]'}`}
+            >
+              {t('channel.asset.udt')}
+            </button>
+          </div>
           <div className="mb-2">
-            <label className="text-[10px] text-[#666] block mb-1">资金量 (shannon)</label>
+            <label className="text-[10px] text-[#666] block mb-1">
+              {t('channel.open.amount')} ({openChannelAssetType === 'CKB' ? t('channel.open.amount.ckb') : t('channel.open.amount.udt')})
+            </label>
             <input
               type="number"
               value={openChannelAmount}
@@ -471,18 +640,23 @@ export default function App() {
               className="w-full bg-[#1e1e1e] border border-[#3e3e42] rounded px-2 py-1 text-xs text-white focus:outline-none focus:border-blue-500"
             />
             <div className="text-[9px] text-[#555] mt-0.5">
-              ≈ {(Number(openChannelAmount) / 1e8).toFixed(2)} CKB
+              {openChannelAssetType === 'CKB'
+                ? `≈ ${(Number(openChannelAmount) / 1e8).toFixed(2)} ${t('channel.asset.ckb')}`
+                : t('channel.open.amount.udtHint')
+              }
             </div>
           </div>
           <button
-            onClick={() => openChannelTarget && !isOpeningChannel && handleOpenChannel(selectedNode, openChannelTarget, openChannelAmount)}
-            disabled={!openChannelTarget || isOpeningChannel}
+            onClick={() => openChannelTarget && !isOpeningChannel && !pendingChannels.has(`${selectedNode}-${openChannelTarget}`) && handleOpenChannel(selectedNode, openChannelTarget, openChannelAmount, openChannelAssetType)}
+            disabled={!openChannelTarget || isOpeningChannel || pendingChannels.has(`${selectedNode}-${openChannelTarget}`)}
             className="w-full py-1.5 bg-blue-600 hover:bg-blue-700 disabled:opacity-40 text-white text-xs rounded transition-colors flex items-center justify-center gap-1.5"
           >
-            {isOpeningChannel ? (
-              <><RefreshCw className="w-3 h-3 animate-spin" /> 建立中...</>
+            {pendingChannels.has(`${selectedNode}-${openChannelTarget}`) ? (
+              <><RefreshCw className="w-3 h-3 animate-spin" /> {t('channel.open.confirming')}</>
+            ) : isOpeningChannel ? (
+              <><RefreshCw className="w-3 h-3 animate-spin" /> {t('channel.open.opening')}</>
             ) : (
-              <>建立通道 ({selectedNode} → {openChannelTarget || '?'})</>
+              <>{t('channel.open.button')} ({selectedNode} → {openChannelTarget || '?'}) [{openChannelAssetType}]</>
             )}
           </button>
         </div>
@@ -491,43 +665,60 @@ export default function App() {
         {selectedChannels.length > 0 && (
           <div className="bg-[#252526] p-3 rounded-lg border border-[#3e3e42]">
             <label className="text-xs text-[#888] block mb-2 flex items-center gap-1">
-              <Unlink className="w-3 h-3" /> 关闭通道 <span className="text-[9px] text-[#555]">(结算到链上)</span>
+              <Unlink className="w-3 h-3" /> {t('channel.close.title')} <span className="text-[9px] text-[#555]">({t('channel.close.hint')})</span>
             </label>
             <div className="space-y-2">
               {selectedChannels.map((ch, i) => {
-                const peerName = ch.peer_id ? findNodeNameByPeerId(ch.peer_id) : '未知';
-                const localBal = Math.floor(Number(ch.local_balance || 0) / 1e8);
-                const remoteBal = Math.floor(Number(ch.remote_balance || 0) / 1e8);
+                const peerName = ch.peer_id ? findNodeNameByPeerId(ch.peer_id) : '?';
+                const isUdtChannel = !!ch.funding_udt_type_script;
+                const assetSymbol = isUdtChannel ? t('channel.asset.udt') : t('channel.asset.ckb');
+                const assetColor = isUdtChannel ? 'text-purple-400' : 'text-orange-400';
+                const divisor = isUdtChannel ? 1 : 1e8;
+                const localBal = Math.floor(Number(ch.local_balance || 0) / divisor);
+                const remoteBal = Math.floor(Number(ch.remote_balance || 0) / divisor);
                 const totalBal = localBal + remoteBal;
                 const stateName = ch.state?.state_name || 'Unknown';
                 const isReady = stateName === 'CHANNEL_READY';
                 return (
                   <div key={ch.channel_id || i} className="bg-[#1e1e1e] rounded px-2 py-2 border border-[#2d2d2d]">
-                    {/* 通道对端信息 */}
-                    <div className="flex items-center justify-between mb-2">
-                      <div className="text-[10px] text-white capitalize">{peerName}</div>
-                      <div className={`text-[9px] px-1.5 py-0.5 rounded ${isReady ? 'bg-green-900/30 text-green-400' : 'bg-yellow-900/30 text-yellow-400'}`}>
-                        {isReady ? '已就绪' : stateName}
+                    {/* 通道标题行：资产类型 → 对端节点 */}
+                    <div className="flex items-center justify-between mb-1">
+                      <div className="flex items-center gap-1.5 text-[11px]">
+                        <span className={`font-medium ${assetColor}`}>{assetSymbol}</span>
+                        <span className="text-[#666]">→</span>
+                        <span className="text-white capitalize font-medium">{peerName}</span>
                       </div>
+                      <span className={`text-[9px] px-1.5 py-0.5 rounded ${isReady ? 'bg-green-900/30 text-green-400' : 'bg-yellow-900/30 text-yellow-400'}`}>
+                        {isReady ? t('channel.status.ready') : stateName}
+                      </span>
                     </div>
-                    
-                    {/* 通道余额分布 */}
+                    {/* 通道 ID */}
+                    {ch.channel_id && (
+                      <div className="text-[9px] text-[#555] mb-2 font-mono break-all" title={ch.channel_id}>
+                        ID: {ch.channel_id}
+                      </div>
+                    )}
+
+                    {/* 通道内余额 - Layer 2 */}
                     <div className="mb-2">
+                      <div className="text-[9px] text-[#666] mb-1 flex items-center gap-1">
+                        <Zap className="w-3 h-3" /> {t('channel.close.title')} (L2)
+                      </div>
                       <div className="flex justify-between text-[9px] text-[#666] mb-1">
-                        <span>通道余额分布</span>
-                        <span className="text-[#888]">总计: {totalBal} CKB</span>
+                        <span>{t('channel.close.totalLocked')}</span>
+                        <span className="text-[#888]">{totalBal.toLocaleString()} {assetSymbol}</span>
                       </div>
                       {/* 余额进度条 */}
                       <div className="h-4 bg-[#252526] rounded overflow-hidden flex">
                         {totalBal > 0 && (
                           <>
-                            <div 
+                            <div
                               className="h-full bg-blue-600 flex items-center justify-center text-[8px] text-white"
                               style={{ width: `${(localBal / totalBal) * 100}%` }}
                             >
                               {localBal > totalBal * 0.15 && `${localBal}`}
                             </div>
-                            <div 
+                            <div
                               className="h-full bg-purple-600 flex items-center justify-center text-[8px] text-white"
                               style={{ width: `${(remoteBal / totalBal) * 100}%` }}
                             >
@@ -537,8 +728,8 @@ export default function App() {
                         )}
                       </div>
                       <div className="flex justify-between text-[9px] mt-1">
-                        <span className="text-blue-400">本地: {localBal} CKB</span>
-                        <span className="text-purple-400">对端: {remoteBal} CKB</span>
+                        <span className="text-blue-400">{t('channel.close.myBalance')}: {localBal.toLocaleString()} {assetSymbol}</span>
+                        <span className="text-purple-400">{t('channel.close.peerBalance')}: {remoteBal.toLocaleString()} {assetSymbol}</span>
                       </div>
                     </div>
 
@@ -548,8 +739,8 @@ export default function App() {
                       disabled={!isReady}
                       className="w-full text-[10px] text-red-400 hover:text-red-300 border border-red-800 hover:border-red-600 disabled:opacity-40 disabled:cursor-not-allowed px-2 py-1 rounded transition-colors flex items-center justify-center gap-1"
                     >
-                      <span>结算并关闭通道</span>
-                      <span className="text-[8px] text-[#666]">(资金回归链上)</span>
+                      <span>{t('channel.close.button')}</span>
+                      <span className="text-[8px] text-[#666]">({t('channel.close.buttonHint')})</span>
                     </button>
                   </div>
                 );
@@ -561,14 +752,14 @@ export default function App() {
         {/* 发起支付 */}
         <div className="bg-[#252526] p-3 rounded-lg border border-[#3e3e42]">
           <label className="text-xs text-[#888] block mb-2 flex items-center gap-1">
-            <Zap className="w-3 h-3" /> 发起支付
+            <Zap className="w-3 h-3" /> {t('payment.title')}
           </label>
           <div className="flex gap-1 mb-2">
-            <button onClick={() => setAssetType('CKB')} className={`flex-1 py-1 text-[10px] rounded border ${assetType === 'CKB' ? 'border-orange-500 text-orange-400 bg-orange-500/10' : 'border-[#3e3e42] text-[#888] hover:bg-[#2d2d2d]'}`}>CKB</button>
-            <button onClick={() => setAssetType('sUDT')} className={`flex-1 py-1 text-[10px] rounded border ${assetType === 'sUDT' ? 'border-purple-500 text-purple-400 bg-purple-500/10' : 'border-[#3e3e42] text-[#888] hover:bg-[#2d2d2d]'}`}>sUDT</button>
+            <button onClick={() => setAssetType('CKB')} className={`flex-1 py-1 text-[10px] rounded border ${assetType === 'CKB' ? 'border-orange-500 text-orange-400 bg-orange-500/10' : 'border-[#3e3e42] text-[#888] hover:bg-[#2d2d2d]'}`}>{t('channel.asset.ckb')}</button>
+            <button onClick={() => setAssetType('UDT')} className={`flex-1 py-1 text-[10px] rounded border ${assetType === 'UDT' ? 'border-purple-500 text-purple-400 bg-purple-500/10' : 'border-[#3e3e42] text-[#888] hover:bg-[#2d2d2d]'}`}>{t('channel.asset.udt')}</button>
           </div>
           <div className="mb-2">
-            <label className="text-[10px] text-[#666] block mb-1">金额</label>
+            <label className="text-[10px] text-[#666] block mb-1">{t('payment.amount')}</label>
             <input
               type="number"
               value={payAmount}
@@ -577,7 +768,7 @@ export default function App() {
             />
           </div>
           <div className="mb-2">
-            <label className="text-[10px] text-[#666] block mb-1">收款节点（支持多跳）</label>
+            <label className="text-[10px] text-[#666] block mb-1">{t('payment.target')}</label>
             <div className="flex gap-1">
               {others.map(n => (
                 <button
@@ -606,7 +797,7 @@ export default function App() {
               className="w-full py-1.5 bg-[#2d2d2d] hover:bg-[#3e3e42] disabled:opacity-40 text-white text-xs rounded border border-[#3e3e42] flex items-center justify-center gap-1.5"
             >
               <Store className="w-3 h-3 text-green-400" />
-              生成发票 ({payTarget || '选择收款节点'})
+              {t('payment.createInvoice')} ({payTarget || t('payment.selectTarget')})
             </button>
             <button
               onClick={handlePayInvoice}
@@ -614,7 +805,7 @@ export default function App() {
               className="w-full py-1.5 bg-blue-600 hover:bg-blue-700 disabled:opacity-40 disabled:bg-[#2d2d2d] text-white text-xs rounded flex items-center justify-center gap-1.5 transition-colors"
             >
               {paymentState === 'paying' ? <Activity className="w-3 h-3 animate-pulse" /> : <Zap className="w-3 h-3" />}
-              {paymentState === 'paying' ? '路由寻路中...' : paymentState === 'success' ? '支付成功!' : '发起支付'}
+              {paymentState === 'paying' ? t('payment.paying') : paymentState === 'success' ? t('payment.success') : t('payment.pay')}
             </button>
           </div>
         </div>
@@ -628,51 +819,59 @@ export default function App() {
       {/* 顶部工具栏 */}
       <header className="h-14 bg-[#1e1e1e] border-b border-[#2d2d2d] flex items-center justify-between px-4 shrink-0">
         <div className="flex items-center gap-6">
+          {/* Logo 和标题 */}
           <div className="flex items-center gap-2">
             <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center">
               <Zap className="w-5 h-5 text-white fill-white" />
             </div>
             <span className="font-bold text-white text-lg tracking-wide">Fiber</span>
+            {mode !== 'home' && (
+              <span className="text-[#666] text-sm ml-2">
+                {mode === 'quickstart' ? `/ ${t('home.quickStart.title')}` : `/ ${t('home.fullDemo.title')}`}
+              </span>
+            )}
           </div>
           
-          <div className="flex items-center gap-1 bg-[#2d2d2d] rounded-md p-1">
-            <button 
-              onClick={handleStartNetwork}
-              disabled={!hasNetwork || isRunning || isConnecting}
-              className={`flex items-center gap-1.5 px-3 py-1.5 text-sm rounded transition-colors ${!hasNetwork ? 'opacity-50 cursor-not-allowed text-gray-500' : isRunning ? 'bg-[#3e3e42] text-white' : 'text-gray-400 hover:text-white hover:bg-[#3e3e42]'}`}
-            >
-              {isConnecting ? (
-                <RefreshCw className="w-3.5 h-3.5 text-blue-400 animate-spin" />
-              ) : (
-                <Play className={`w-3.5 h-3.5 ${isRunning ? 'fill-green-500 text-green-500' : 'fill-gray-500 text-gray-500'}`} />
-              )}
-              {isConnecting ? 'Connecting...' : 'Start'}
-            </button>
-            <button 
-              onClick={handleStopNetwork}
-              disabled={!hasNetwork || (!isRunning && !isConnecting)}
-              className={`flex items-center gap-1.5 px-3 py-1.5 text-sm rounded transition-colors ${(!isRunning && !isConnecting) ? 'opacity-50 cursor-not-allowed text-gray-500' : 'bg-[#3e3e42] text-white hover:bg-red-900/30'}`}
-            >
-              <Square className={`w-3.5 h-3.5 ${!isRunning && !isConnecting ? 'fill-gray-500 text-gray-500' : 'fill-red-500 text-red-500'}`} /> Stop
-            </button>
-
-          </div>
+          {/* Demo 模式的 Start/Stop 控制 - 已移除 */}
         </div>
 
-
+        <div className="flex items-center gap-3">
+          {/* 语言切换 */}
+          <LanguageSwitcher />
+          
+          {/* 返回首页按钮 */}
+          {mode !== 'home' && (
+            <button
+              onClick={() => setMode('home')}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-[#888] hover:text-white border border-[#3e3e42] hover:border-[#555] rounded transition-colors"
+            >
+              {t('nav.backToHome')}
+            </button>
+          )}
+          
+          <NextLink
+            href="/docs"
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-[#888] hover:text-white border border-[#3e3e42] hover:border-[#555] rounded transition-colors"
+          >
+            <Zap className="w-3 h-3" /> {t('nav.sdkDocs')}
+          </NextLink>
+        </div>
       </header>
 
       {/* 主体工作区 */}
-      <div className="flex-1 flex overflow-hidden">
+      <div className="flex-1 flex flex-col overflow-hidden">
+      {/* 中间行：左侧边栏 + 画布 + 右侧面板 */}
+      <div className="flex-1 flex overflow-hidden min-h-0">
         
-        {/* 左侧边栏 */}
+        {/* 左侧边栏 - 仅 Demo 模式显示 */}
+        {mode === 'demo' && (
         <aside className="w-64 bg-[#1e1e1e] border-r border-[#2d2d2d] flex flex-col shrink-0 overflow-y-auto z-10" style={{ scrollbarGutter: 'stable' }}>
           <div className="p-4 flex-1">
-            <h3 className="text-xs font-bold text-[#666] tracking-widest mb-3 uppercase">Network Action</h3>
+            <h3 className="text-xs font-bold text-[#666] tracking-widest mb-3 uppercase">{t('demo.sidebar.networkAction')}</h3>
             
             {!hasNetwork ? (
               <div className="text-center py-8 text-sm text-[#888]">
-                Please create a network first.
+                {t('demo.sidebar.createNetworkFirst')}
               </div>
             ) : (
               <div className={`transition-opacity duration-300 ${isRunning ? 'opacity-100' : 'opacity-40 pointer-events-none'}`}>
@@ -682,22 +881,57 @@ export default function App() {
                 {isRunning && (
                   <div className="mt-3 bg-[#252526] p-3 rounded-lg border border-[#3e3e42]">
                     <div className="flex items-center justify-between mb-2">
-                      <label className="text-xs text-[#888]">通道状态</label>
-                      <button 
-                        onClick={() => { fetchChannels(); fetchNodeStatus(); }}
-                        className="text-[10px] text-blue-400 hover:text-blue-300 flex items-center gap-1"
-                      >
-                        <RefreshCw className="w-3 h-3" /> 刷新
-                      </button>
+                      <label className="text-xs text-[#888]">{t('demo.sidebar.channelStatus')}</label>
                     </div>
                     {FIBER_NODES.map(name => {
                       const chs = channels[name] || [];
+                      const totalChannels = chs.length;
                       return (
-                        <div key={name} className="flex justify-between text-[10px] py-0.5">
-                          <span className="text-[#888] capitalize">{name}</span>
-                          <span className={chs.length > 0 ? 'text-green-400' : 'text-gray-500'}>
-                            {chs.length} 通道
-                          </span>
+                        <div key={name} className="mb-2 last:mb-0">
+                          {/* 节点标题行 */}
+                          <div className="flex justify-between text-[10px] py-0.5 mb-1">
+                            <span className="text-[#aaa] font-medium capitalize">{name}</span>
+                            <span className={totalChannels > 0 ? 'text-blue-400' : 'text-gray-500'}>
+                              {totalChannels} {t('demo.sidebar.channels')}
+                            </span>
+                          </div>
+                          {/* 通道列表 */}
+                          {chs.length > 0 && (
+                            <div className="space-y-1 pl-2 border-l border-[#3e3e42] ml-1">
+                              {chs.map((ch, idx) => {
+                                const peerName = ch.peer_id ? findNodeNameByPeerId(ch.peer_id) : '未知';
+                                const isUdt = !!ch.funding_udt_type_script;
+                                const assetType = isUdt ? 'sUDT' : 'CKB';
+                                const stateName = ch.state?.state_name || 'Unknown';
+                                const isReady = stateName === 'CHANNEL_READY';
+                                const channelKey = `${name}-${peerName.toLowerCase()}`;
+                                const isPending = pendingChannels.has(channelKey);
+                                
+                                return (
+                                  <div key={ch.channel_id || idx} className="flex items-center gap-1.5 text-[9px] py-0.5">
+                                    {/* 通道类型标签 */}
+                                    <span className={`px-1.5 py-0.5 rounded ${isUdt ? 'bg-purple-500/20 text-purple-400' : 'bg-orange-500/20 text-orange-400'}`}>
+                                      {isUdt ? t('channel.asset.udt') : t('channel.asset.ckb')}
+                                    </span>
+                                    {/* 对端节点 */}
+                                    <span className="text-[#888]">→</span>
+                                    <span className="text-[#ccc] capitalize">{peerName}</span>
+                                    {/* 状态标签 */}
+                                    {isPending ? (
+                                      <span className="ml-auto flex items-center gap-0.5 text-yellow-400">
+                                        <RefreshCw className="w-2.5 h-2.5 animate-spin" />
+                                        {t('channel.status.confirming')}
+                                      </span>
+                                    ) : isReady ? (
+                                      <span className="ml-auto text-green-400">✓ {t('channel.status.ready')}</span>
+                                    ) : (
+                                      <span className="ml-auto text-yellow-400">{t('channel.status.waiting')}</span>
+                                    )}
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          )}
                         </div>
                       );
                     })}
@@ -707,42 +941,128 @@ export default function App() {
             )}
           </div>
 
-          <div className="mt-auto p-4 border-t border-[#2d2d2d]">
-            <h3 className="text-xs font-bold text-[#666] tracking-widest mb-3 uppercase">Networks</h3>
-            {hasNetwork ? (
-              <div className="bg-[#2d2d2d] px-3 py-2 rounded flex items-center gap-2 text-sm text-white border border-[#3e3e42]">
-                <div className={`w-2 h-2 rounded-full ${isRunning ? 'bg-green-500 shadow-[0_0_6px_rgba(34,197,94,0.6)]' : 'bg-gray-500'}`}></div>
-                Fiber Demo Net
-              </div>
-            ) : null}
-            <button 
-              onClick={handleCreateNetwork}
-              disabled={hasNetwork}
-              className="w-full px-3 py-2 text-sm text-[#888] hover:text-white flex items-center gap-2 mt-2 border border-dashed border-[#3e3e42] hover:border-[#666] rounded disabled:opacity-30 disabled:cursor-not-allowed"
-            >
-              <Plus className="w-4 h-4" /> Create Network
-            </button>
+          <div className="mt-auto p-3 border-t border-[#2d2d2d]">
+            <div className="text-[10px] text-[#666] uppercase tracking-wider mb-2">{t('demo.sidebar.nodeStatus')}</div>
+            <div className="space-y-1.5">
+              {FIBER_NODES.map(name => {
+                const online = nodeStatus[name]?.isOnline ?? false;
+                return (
+                  <div key={name} className={`flex items-center gap-2 px-2.5 py-1.5 rounded-md text-xs ${
+                    online ? 'text-[#3fb950]' : 'text-[#f85149]'
+                  }`}>
+                    <div className={`w-1.5 h-1.5 rounded-full ${online ? 'bg-[#3fb950]' : 'bg-[#f85149]'}`} />
+                    <span className="capitalize font-medium">{name}</span>
+                    <span className="ml-auto text-[10px] opacity-60">{online ? t('demo.sidebar.online') : t('demo.sidebar.offline')}</span>
+                  </div>
+                );
+              })}
+            </div>
           </div>
         </aside>
+        )}
 
         {/* 右侧画布 */}
         <main className="flex-1 relative bg-[#191919] overflow-hidden flex items-center justify-center">
           
-          {!hasNetwork ? (
+          {/* 首页：双入口选择 */}
+          {mode === 'home' && (
             <div className="flex flex-col items-center text-center z-10">
-              <div className="w-20 h-20 bg-[#252526] rounded-full flex items-center justify-center border border-[#3e3e42] mb-6 shadow-xl">
-                <Box className="w-10 h-10 text-[#444]" />
+              <div className="w-20 h-20 bg-gradient-to-br from-blue-600 to-purple-600 rounded-2xl flex items-center justify-center mb-6 shadow-xl shadow-blue-900/30">
+                <Zap className="w-10 h-10 text-white fill-white" />
               </div>
-              <h2 className="text-xl font-bold text-white mb-2">No Network Active</h2>
-              <p className="text-[#888] mb-6 max-w-sm">Create a new network workspace to start visualizing and testing Fiber payment channels.</p>
-              <button 
-                onClick={handleCreateNetwork}
-                className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded-full font-medium transition-colors shadow-lg shadow-blue-900/20 flex items-center gap-2"
-              >
-                <Plus className="w-4 h-4" /> Create Fiber Network
-              </button>
+              <h1 className="text-3xl font-bold text-white mb-2">{t('app.title')}</h1>
+              <p className="text-[#888] mb-10 max-w-md">{t('app.description')}</p>
+              
+              <div className="flex gap-6">
+                {/* 快速入门卡片 */}
+                <div className="w-72 bg-[#1e1e1e] rounded-xl border border-[#3e3e42] p-6 hover:border-blue-500/50 transition-all group cursor-pointer"
+                     onClick={handleEnterQuickStart}>
+                  <div className="w-12 h-12 bg-blue-600/20 rounded-lg flex items-center justify-center mb-4 group-hover:bg-blue-600/30 transition-colors">
+                    <Play className="w-6 h-6 text-blue-400" />
+                  </div>
+                  <h3 className="text-lg font-semibold text-white mb-2">{t('home.quickStart.title')}</h3>
+                  <p className="text-[#888] text-sm mb-4">{t('home.quickStart.desc')}</p>
+                  
+                  {/* 简化拓扑图示意 */}
+                  <div className="bg-[#252526] rounded-lg p-4 mb-4 h-[140px] flex flex-col items-center justify-center">
+                    <div className="flex items-center justify-center gap-4">
+                      <div className="w-12 h-12 rounded-lg bg-purple-600/20 border border-purple-500/30 flex items-center justify-center">
+                        <span className="text-purple-400 font-bold text-sm">A</span>
+                      </div>
+                      <div className="flex-1 h-0.5 bg-gradient-to-r from-purple-500/50 via-blue-500 to-purple-500/50 relative">
+                        <div className="absolute inset-0 bg-blue-400/50 animate-pulse"></div>
+                      </div>
+                      <div className="w-12 h-12 rounded-lg bg-purple-600/20 border border-purple-500/30 flex items-center justify-center">
+                        <span className="text-purple-400 font-bold text-sm">B</span>
+                      </div>
+                    </div>
+                    <p className="text-[#666] text-xs mt-3 text-center">{t('home.quickStart.step1')} → {t('home.quickStart.step2')} → {t('home.quickStart.step3')}</p>
+                  </div>
+                  
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="text-[#666]">{t('home.quickStart.requireDocker')}</span>
+                    <span className="text-blue-400 group-hover:translate-x-1 transition-transform">{t('home.quickStart.startLearning')} →</span>
+                  </div>
+                </div>
+                
+                {/* 完整演示卡片 */}
+                <div className="w-72 bg-[#1e1e1e] rounded-xl border border-[#3e3e42] p-6 hover:border-green-500/50 transition-all group cursor-pointer"
+                     onClick={handleEnterDemo}>
+                  <div className="w-12 h-12 bg-green-600/20 rounded-lg flex items-center justify-center mb-4 group-hover:bg-green-600/30 transition-colors">
+                    <Activity className="w-6 h-6 text-green-400" />
+                  </div>
+                  <h3 className="text-lg font-semibold text-white mb-2">{t('home.fullDemo.title')}</h3>
+                  <p className="text-[#888] text-sm mb-4">{t('home.fullDemo.desc')}</p>
+                  
+                  {/* 多跳拓扑图示意 */}
+                  <div className="bg-[#252526] rounded-lg p-4 mb-4 h-[140px] flex flex-col items-center justify-center">
+                    <div className="flex flex-col items-center gap-2">
+                      <div className="flex items-center gap-8">
+                        <div className="w-12 h-12 rounded-lg bg-purple-600/20 border border-purple-500/30 flex items-center justify-center">
+                          <span className="text-purple-400 font-bold text-sm">A</span>
+                        </div>
+                        <div className="w-12 h-12 rounded-lg bg-purple-600/20 border border-purple-500/30 flex items-center justify-center">
+                          <span className="text-purple-400 font-bold text-sm">B</span>
+                        </div>
+                      </div>
+                      <div className="w-12 h-12 rounded-lg bg-green-600/20 border border-green-500/30 flex items-center justify-center">
+                        <span className="text-green-400 font-bold text-sm">C</span>
+                      </div>
+                    </div>
+                    <p className="text-[#666] text-xs mt-3 text-center">{t('home.fullDemo.route')}</p>
+                  </div>
+                  
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="text-[#666]">{t('home.quickStart.requireDocker')}</span>
+                    <span className="text-green-400 group-hover:translate-x-1 transition-transform">{t('home.fullDemo.enterDemo')} →</span>
+                  </div>
+                </div>
+              </div>
             </div>
-          ) : (
+          )}
+          
+          {/* Quick Start 模式 */}
+          {mode === 'quickstart' && (
+            <QuickStart onBack={() => setMode('home')} />
+          )}
+          
+          {/* Demo 模式：原有拓扑图 */}
+          {mode === 'demo' && (
+            !hasNetwork ? (
+              <div className="flex flex-col items-center text-center z-10">
+                <div className="w-20 h-20 bg-[#252526] rounded-full flex items-center justify-center border border-[#3e3e42] mb-6 shadow-xl">
+                  <Box className="w-10 h-10 text-[#444]" />
+                </div>
+                <h2 className="text-xl font-bold text-white mb-2">{t('demo.init.title')}</h2>
+                <p className="text-[#888] mb-6 max-w-sm">{t('demo.init.desc')}</p>
+                <button 
+                  onClick={handleCreateNetwork}
+                  className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded-full font-medium transition-colors shadow-lg shadow-blue-900/20 flex items-center gap-2"
+                >
+                  <Plus className="w-4 h-4" /> {t('demo.init.button')}
+                </button>
+              </div>
+            ) :
             <div className="relative w-[800px] h-[600px] scale-90 lg:scale-100">
               
               {/* SVG 连线层 */}
@@ -774,25 +1094,68 @@ export default function App() {
                   </>
                 )}
 
-                {/* L2 通道连线：动态判断，有通道才画 */}
-                {hasChannelBetween('alice', 'bob') && (
-                  <>
-                    <line x1="200" y1="300" x2="600" y2="300" stroke="#4a6fa5" strokeWidth="3" />
-                    <line x1="200" y1="300" x2="600" y2="300" stroke="#6b9bd2" strokeWidth="1" strokeDasharray="4 4" opacity="0.6" />
-                  </>
-                )}
-                {hasChannelBetween('bob', 'charlie') && (
-                  <>
-                    <line x1="600" y1="300" x2="400" y2="500" stroke="#4a6fa5" strokeWidth="3" />
-                    <line x1="600" y1="300" x2="400" y2="500" stroke="#6b9bd2" strokeWidth="1" strokeDasharray="4 4" opacity="0.6" />
-                  </>
-                )}
-                {hasChannelBetween('alice', 'charlie') && (
-                  <>
-                    <line x1="200" y1="300" x2="400" y2="500" stroke="#4a6fa5" strokeWidth="3" />
-                    <line x1="200" y1="300" x2="400" y2="500" stroke="#6b9bd2" strokeWidth="1" strokeDasharray="4 4" opacity="0.6" />
-                  </>
-                )}
+                {/* L2 通道连线：动态判断，有通道才画，根据类型显示不同颜色 */}
+                {(() => {
+                  const ab = getChannelInfoBetween('alice', 'bob');
+                  const bc = getChannelInfoBetween('bob', 'charlie');
+                  const ac = getChannelInfoBetween('alice', 'charlie');
+                  
+                  return (
+                    <>
+                      {/* Alice - Bob */}
+                      {ab.hasChannel && (
+                        <>
+                          <line 
+                            x1="200" y1="300" x2="600" y2="300" 
+                            stroke={ab.isUdt ? "#a855f7" : "#f97316"} 
+                            strokeWidth="3" 
+                          />
+                          <line 
+                            x1="200" y1="300" x2="600" y2="300" 
+                            stroke={ab.isUdt ? "#c084fc" : "#fb923c"} 
+                            strokeWidth="1" 
+                            strokeDasharray={ab.isReady ? "0" : "4 4"} 
+                            opacity="0.6" 
+                          />
+                        </>
+                      )}
+                      {/* Bob - Charlie */}
+                      {bc.hasChannel && (
+                        <>
+                          <line 
+                            x1="600" y1="300" x2="400" y2="500" 
+                            stroke={bc.isUdt ? "#a855f7" : "#f97316"} 
+                            strokeWidth="3" 
+                          />
+                          <line 
+                            x1="600" y1="300" x2="400" y2="500" 
+                            stroke={bc.isUdt ? "#c084fc" : "#fb923c"} 
+                            strokeWidth="1" 
+                            strokeDasharray={bc.isReady ? "0" : "4 4"} 
+                            opacity="0.6" 
+                          />
+                        </>
+                      )}
+                      {/* Alice - Charlie */}
+                      {ac.hasChannel && (
+                        <>
+                          <line 
+                            x1="200" y1="300" x2="400" y2="500" 
+                            stroke={ac.isUdt ? "#a855f7" : "#f97316"} 
+                            strokeWidth="3" 
+                          />
+                          <line 
+                            x1="200" y1="300" x2="400" y2="500" 
+                            stroke={ac.isUdt ? "#c084fc" : "#fb923c"} 
+                            strokeWidth="1" 
+                            strokeDasharray={ac.isReady ? "0" : "4 4"} 
+                            opacity="0.6" 
+                          />
+                        </>
+                      )}
+                    </>
+                  );
+                })()}
 
                 {/* 支付动画 */}
                 {paymentState === 'paying' && selectedNode && payTarget && (
@@ -850,22 +1213,35 @@ export default function App() {
                         {node.type === 'l1' ? (
                           <>
                             <div className="flex justify-between text-[11px] text-[#888] mb-1">
-                              <span>Height</span><span className="text-[#ccc]">{isRunning ? node.height : '-'}</span>
+                              <span>{t('demo.node.l1.height')}</span><span className="text-[#ccc]">{isRunning ? node.height : '-'}</span>
                             </div>
                             <div className="flex justify-between text-[11px] text-[#888]">
-                              <span>Version</span><span className="text-[#ccc]">{node.version}</span>
+                              <span>{t('demo.node.l1.version')}</span><span className="text-[#ccc]">{node.version}</span>
                             </div>
                           </>
                         ) : (
                           <>
-                            <div className="flex justify-between text-[11px] text-[#888] mb-1">
-                              <span>CKB Bal</span>
-                              <span className="text-orange-400 font-mono">
-                                {isRunning ? (nodeStatus[node.name]?.ckbBalance || 0).toLocaleString() : '-'}
-                              </span>
+                            {/* 链上余额 - Layer 1 */}
+                            <div className="mb-2 pb-2 border-b border-[#2d2d2d]">
+                              <div className="text-[9px] text-[#666] mb-1 flex items-center gap-1">
+                                <Box className="w-3 h-3" /> {t('demo.node.l1.balance')}
+                              </div>
+                              <div className="flex justify-between text-[11px] text-[#888] mb-0.5">
+                                <span>{t('channel.asset.ckb')}</span>
+                                <span className="text-orange-400 font-mono">
+                                  {isRunning ? (nodeStatus[node.name]?.ckbBalance || 0).toLocaleString() : '-'}
+                                </span>
+                              </div>
+                              <div className="flex justify-between text-[11px] text-[#888]">
+                                <span>{t('channel.asset.udt')}</span>
+                                <span className="text-purple-400 font-mono">
+                                  {isRunning ? (nodeStatus[node.name]?.udtBalance || 0).toLocaleString() : '-'}
+                                </span>
+                              </div>
                             </div>
+                            {/* 通道统计 */}
                             <div className="flex justify-between text-[11px] text-[#888]">
-                              <span>Channels</span>
+                              <span className="flex items-center gap-1"><Link className="w-3 h-3" /> {t('demo.node.l2.channels')}</span>
                               <span className="text-blue-400 font-mono">{(channels[node.name] || []).length}</span>
                             </div>
                           </>
@@ -873,7 +1249,7 @@ export default function App() {
                       </div>
 
                       {isSelected && (
-                        <div className="mt-2 text-[9px] text-blue-400 text-center">已选中 · 查看左侧面板</div>
+                        <div className="mt-2 text-[9px] text-blue-400 text-center">{t('demo.node.selected')}</div>
                       )}
                     </div>
                   </div>
@@ -883,66 +1259,200 @@ export default function App() {
             </div>
           )}
           
+          {mode === 'demo' && hasNetwork && (
           <div className="absolute bottom-4 right-4 bg-[#252526] border border-[#3e3e42] rounded px-3 py-1.5 flex gap-4 text-xs text-[#666]">
-            <span>Zoom: 100%</span>
-            <span>{selectedNode ? `Selected: ${selectedNode}` : 'Click node to select'}</span>
+            <span>{t('demo.zoom')}: 100%</span>
+            <span>{selectedNode ? `${t('demo.selected')}: ${selectedNode}` : t('demo.clickToSelect')}</span>
           </div>
-        </main>
-      </div>
-
-      {/* 底部终端区 */}
-      <footer className="h-64 bg-[#1e1e1e] border-t border-[#2d2d2d] flex flex-col shrink-0">
-        <div className="flex items-center gap-1 px-2 border-b border-[#2d2d2d] pt-1">
-          {['Output'].map(tab => (
-            <button 
-              key={tab}
-              onClick={() => setActiveTab(tab)}
-              className={`px-4 py-2 text-xs border-b-2 transition-colors ${activeTab === tab ? 'border-blue-500 text-white' : 'border-transparent text-[#888] hover:text-white'}`}
-            >
-              {tab}
-            </button>
-          ))}
-        </div>
-
-        <div className="flex-1 overflow-y-auto p-4 font-mono text-xs leading-5">
-          {activeTab === 'Output' && (
-            <div className="space-y-1">
-              {!isClient ? (
-                <div className="text-[#666] p-2">Loading...</div>
-              ) : (
-                logs.map((log, i) => (
-                  <div key={i} className="flex hover:bg-[#252526] px-1 py-0.5 rounded -mx-1 transition-all">
-                    <span className="text-[#666] shrink-0 w-20">{log.time}</span>
-                    {log.type === 'sys' ? (
-                      <>
-                        <span className={`shrink-0 w-10 ${log.method === 'error' ? 'text-red-400' : 'text-yellow-500'}`}>SYS</span>
-                        <span className="text-[#888] shrink-0 w-32">[{log.node}]</span>
-                        <span className="text-[#cccccc] whitespace-pre-wrap">
-                          {typeof log.payload === 'string' ? log.payload : JSON.stringify(log.payload)}
-                        </span>
-                      </>
-                    ) : (
-                      <>
-                        <span className={`shrink-0 w-10 ${log.type === 'req' ? 'text-blue-400' : 'text-green-400'}`}>
-                          {log.type === 'req' ? 'REQ' : 'RES'}
-                        </span>
-                        <span className="text-[#888] shrink-0 w-32">[{log.node}]</span>
-                        <span className="text-purple-400 shrink-0 w-36">{log.method}</span>
-                        <span className="text-[#aaa] break-all">
-                          {typeof log.payload === 'string' ? log.payload : JSON.stringify(log.payload)}
-                        </span>
-                      </>
-                    )}
-                  </div>
-                ))
-              )}
-              <div ref={logsEndRef} />
-            </div>
           )}
-          {activeTab === 'Terminal' && <div className="text-[#666] p-2">Terminal process attached. Waiting for input...</div>}
-          {activeTab === 'Debug Console' && <div className="text-[#666] p-2">No active debug session.</div>}
-        </div>
-      </footer>
+        </main>
+
+        {/* 右侧面板：Output + RPC Inspector - 仅 Demo 模式显示 */}
+        {mode === 'demo' && (
+        <aside className="w-96 bg-[#1e1e1e] border-l border-[#2d2d2d] flex flex-col shrink-0">
+          {/* Tab 栏 */}
+          <div className="flex items-center gap-1 px-2 border-b border-[#2d2d2d] pt-1 shrink-0">
+            {['output', 'rpcInspector'].map(tab => (
+              <button
+                key={tab}
+                onClick={() => setActiveTab(tab === 'output' ? 'Output' : 'RPC Inspector')}
+                className={`px-4 py-2 text-xs border-b-2 transition-colors ${activeTab === (tab === 'output' ? 'Output' : 'RPC Inspector') ? 'border-blue-500 text-white' : 'border-transparent text-[#888] hover:text-white'}`}
+              >
+                {t(tab === 'output' ? 'output.title' : 'output.rpcInspector')}
+                {tab === 'rpcInspector' && rpcHistory.length > 0 && (
+                  <span className="ml-1.5 text-[9px] bg-blue-600 text-white rounded-full px-1.5 py-0.5">{rpcHistory.length}</span>
+                )}
+              </button>
+            ))}
+          </div>
+
+          {/* 内容区 */}
+          <div className="flex-1 overflow-hidden">
+            {activeTab === 'Output' && (
+              <div className="h-full overflow-y-auto p-3 font-mono text-xs leading-5">
+                <div className="space-y-1">
+                  {!isClient ? (
+                    <div className="text-[#666] p-2">Loading...</div>
+                  ) : (
+                    logs.map((log, i) => (
+                      <div key={i} className="flex hover:bg-[#252526] px-1 py-0.5 rounded -mx-1 transition-all">
+                        <span className="text-[#666] shrink-0 w-16">{log.time}</span>
+                        {log.type === 'sys' ? (
+                          <>
+                            <span className={`shrink-0 w-14 ${log.method === 'error' ? 'text-red-400' : 'text-yellow-500'}`}>{t('log.system')}</span>
+                            <span className="text-[#cccccc] whitespace-pre-wrap break-all">
+                              {typeof log.payload === 'string' ? log.payload : JSON.stringify(log.payload)}
+                            </span>
+                          </>
+                        ) : (
+                          <>
+                            <span className={`shrink-0 w-14 ${log.type === 'req' ? 'text-blue-400' : 'text-green-400'}`}>
+                              {log.type === 'req' ? t('log.request') : t('log.response')}
+                            </span>
+                            <span className="text-purple-400 shrink-0 w-28 truncate">{log.method}</span>
+                            <span className="text-[#aaa] break-all">
+                              {typeof log.payload === 'string' ? log.payload : JSON.stringify(log.payload)}
+                            </span>
+                          </>
+                        )}
+                      </div>
+                    ))
+                  )}
+                  <div ref={logsEndRef} />
+                </div>
+              </div>
+            )}
+
+            {activeTab === 'RPC Inspector' && (
+              <div className="h-full flex flex-col font-mono text-xs">
+                {/* 操作历史列表 */}
+                <div className="border-b border-[#2d2d2d] overflow-y-auto shrink-0" style={{ maxHeight: '35%' }}>
+                  {rpcHistory.length === 0 ? (
+                    <div className="p-4 text-[#555] text-center">
+                      <div className="text-xl mb-1 opacity-30">⬡</div>
+                      {t('output.rpcHint')}
+                    </div>
+                  ) : (
+                    rpcHistory.map(entry => (
+                      <button
+                        key={entry.id}
+                        onClick={() => setSelectedRpcEntry(entry.id)}
+                        className={`w-full text-left px-3 py-2 border-b border-[#252526] hover:bg-[#252526] transition-colors ${selectedRpcEntry === entry.id ? 'bg-[#252526] border-l-2 border-l-blue-500' : ''}`}
+                      >
+                        <div className="flex items-center gap-1.5">
+                          <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${entry.status === 'success' ? 'bg-green-500' : 'bg-red-500'}`} />
+                          <span className="text-white text-[11px] truncate flex-1">{entry.operation}</span>
+                          <span className="text-[#555] text-[10px] shrink-0">{entry.timestamp}</span>
+                          <span className="text-[#555] text-[10px] shrink-0">{entry.traces.length}×</span>
+                        </div>
+                      </button>
+                    ))
+                  )}
+                </div>
+
+                {/* 调用详情 */}
+                <div className="flex-1 overflow-y-auto p-2 space-y-2">
+                  {!selectedRpcEntry ? (
+                    <div className="text-[#555] text-center pt-6">↑ {t('output.clickToView')}</div>
+                  ) : (() => {
+                    const entry = rpcHistory.find(e => e.id === selectedRpcEntry);
+                    if (!entry) return null;
+                    return entry.traces.map((trace, idx) => {
+                      const traceKey = `${entry.id}-${idx}`;
+                      const isExpanded = expandedTraces[traceKey] !== false;
+                      const methodSchema = RPC_SCHEMA[trace.method];
+                      return (
+                        <div key={traceKey} className="bg-[#252526] rounded border border-[#3e3e42] overflow-hidden">
+                          <button
+                            className="w-full flex items-center gap-2 px-3 py-2 hover:bg-[#2d2d2d] transition-colors"
+                            onClick={() => setExpandedTraces(prev => ({ ...prev, [traceKey]: !isExpanded }))}
+                          >
+                            {isExpanded ? <ChevronDown className="w-3 h-3 text-[#666] shrink-0" /> : <ChevronRight className="w-3 h-3 text-[#666] shrink-0" />}
+                            <span className="text-blue-400 font-bold">{trace.method}</span>
+                            {trace.error ? (
+                              <span className="ml-auto text-red-400 text-[10px]">ERROR · {trace.durationMs}ms</span>
+                            ) : (
+                              <span className="ml-auto text-green-500 text-[10px]">OK · {trace.durationMs}ms</span>
+                            )}
+                          </button>
+
+                          {isExpanded && (
+                            <div className="px-3 pb-3 space-y-2">
+                              {methodSchema && (
+                                <div className="text-[10px] text-[#888] bg-[#1e1e1e] rounded px-2 py-1.5 border border-[#2d2d2d]">
+                                  {methodSchema.description}
+                                </div>
+                              )}
+
+                              <div>
+                                <div className="text-[10px] text-yellow-500 mb-1 flex items-center gap-1">
+                                  <span className="font-bold">{t('output.request')}</span>
+                                  <span className="text-[#555]">params[0]</span>
+                                </div>
+                                <pre className="text-[10px] text-[#cccccc] bg-[#1a1a1a] rounded p-2 overflow-x-auto border border-[#2d2d2d] whitespace-pre-wrap break-all">
+                                  {trace.params === null || trace.params === undefined
+                                    ? <span className="text-[#555]">(no params)</span>
+                                    : JSON.stringify(trace.params, null, 2)}
+                                </pre>
+                              </div>
+
+                              {methodSchema && methodSchema.params.length > 0 && (
+                                <div className="border border-[#2d2d2d] rounded overflow-hidden">
+                                  <div className="text-[9px] text-[#666] px-2 py-1 bg-[#1a1a1a] border-b border-[#2d2d2d] font-bold uppercase tracking-wider">{t('output.paramDesc')}</div>
+                                  {methodSchema.params.map(p => (
+                                    <div key={p.field} className="flex gap-2 px-2 py-1 text-[10px] border-b border-[#1e1e1e] last:border-0">
+                                      <span className="text-purple-400 shrink-0 w-28 font-mono truncate" title={p.field}>{p.field}</span>
+                                      <span className="text-orange-300 shrink-0 w-16 opacity-70 truncate">{p.type}</span>
+                                      <span className={`shrink-0 text-[9px] w-12 ${p.required ? 'text-red-400' : 'text-[#555]'}`}>{p.required ? 'required' : 'optional'}</span>
+                                      <span className="text-[#888] flex-1 leading-relaxed">{p.desc}</span>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+
+                              <div>
+                                <div className={`text-[10px] mb-1 font-bold ${trace.error ? 'text-red-400' : 'text-green-400'}`}>
+                                  {trace.error ? t('output.error') : t('output.response')}
+                                </div>
+                                {trace.error ? (
+                                  <pre className="text-[10px] text-red-300 bg-[#1a1a1a] rounded p-2 overflow-x-auto border border-red-900/30 whitespace-pre-wrap break-all">
+                                    {trace.error}
+                                  </pre>
+                                ) : (
+                                  <pre className="text-[10px] text-[#cccccc] bg-[#1a1a1a] rounded p-2 overflow-x-auto border border-[#2d2d2d] whitespace-pre-wrap break-all">
+                                    {trace.result === null || trace.result === undefined
+                                      ? <span className="text-[#555]">null</span>
+                                      : JSON.stringify(trace.result, null, 2)}
+                                  </pre>
+                                )}
+                              </div>
+
+                              {methodSchema && methodSchema.returns.length > 0 && (
+                                <div className="border border-[#2d2d2d] rounded overflow-hidden">
+                                  <div className="text-[9px] text-[#666] px-2 py-1 bg-[#1a1a1a] border-b border-[#2d2d2d] font-bold uppercase tracking-wider">{t('output.returnDesc')}</div>
+                                  {methodSchema.returns.map(r => (
+                                    <div key={r.field} className="flex gap-2 px-2 py-1 text-[10px] border-b border-[#1e1e1e] last:border-0">
+                                      <span className="text-green-400 shrink-0 w-28 font-mono truncate" title={r.field}>{r.field}</span>
+                                      <span className="text-orange-300 shrink-0 w-16 opacity-70 truncate">{r.type}</span>
+                                      <span className="text-[#888] flex-1 leading-relaxed">{r.desc}</span>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    });
+                  })()}
+                </div>
+              </div>
+            )}
+          </div>
+        </aside>
+        )}
+      </div>
+      </div>
     </div>
   );
 }

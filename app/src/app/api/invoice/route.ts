@@ -1,10 +1,10 @@
 import { NextResponse } from 'next/server';
-import { createInvoice, NODES } from '@/lib/fiber-client';
+import { createInvoiceWithTrace, NODES } from '@/lib/fiber-client';
 
 export async function POST(request: Request) {
   try {
     const body = await request.json();
-    const { nodeName = 'charlie', amount, description = 'B端订单', expiry = 3600 } = body;
+    const { nodeName = 'charlie', amount, description = 'B端订单', expiry = 3600, assetType = 'CKB' } = body;
 
     if (!amount) {
       return NextResponse.json(
@@ -21,23 +21,35 @@ export async function POST(request: Request) {
       );
     }
 
-    // 金额转换为 shannon (1 CKB = 10^8 shannon)
-    const amountInShannon = (parseFloat(amount) * 100000000).toString();
+    // 金额转换：CKB 转换为 shannon (1 CKB = 10^8 shannon)，UDT 直接使用
+    const amountInBaseUnit = assetType === 'CKB'
+      ? (parseFloat(amount) * 100000000).toString()
+      : amount.toString();
 
-    const result = await createInvoice(nodeName, {
-      amount: amountInShannon,
+    const { result, trace } = await createInvoiceWithTrace(nodeName, {
+      amount: amountInBaseUnit,
       description,
       expiry,
+      assetType: assetType as 'CKB' | 'UDT',
     });
 
-    // Fiber new_invoice 返回 { invoice_address: "fibd...", invoice: {...} }
-    // 我们返回 invoice_address 作为支付用的字符串
+    if (trace.error) {
+      return NextResponse.json(
+        { error: trace.error, rpcTrace: [trace] },
+        { status: 500 }
+      );
+    }
+
+    const typedResult = result as { invoice_address?: string } | null;
+
     return NextResponse.json({
       success: true,
       node: nodeName,
-      invoice: result.invoice_address || result,
+      invoice: typedResult?.invoice_address || result,
       amount,
+      assetType,
       description,
+      rpcTrace: [trace],
     });
   } catch (error) {
     return NextResponse.json(

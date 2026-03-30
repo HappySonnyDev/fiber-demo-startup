@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { payInvoice, NODES } from '@/lib/fiber-client';
+import { payInvoiceWithTrace, NODES } from '@/lib/fiber-client';
 
 export async function POST(request: Request) {
   try {
@@ -21,12 +21,20 @@ export async function POST(request: Request) {
       );
     }
 
-    const result = await payInvoice(nodeName, { invoice });
+    const { result, trace } = await payInvoiceWithTrace(nodeName, { invoice });
+
+    if (trace.error) {
+      return NextResponse.json(
+        { error: trace.error, rpcTrace: [trace] },
+        { status: 500 }
+      );
+    }
 
     return NextResponse.json({
       success: true,
       node: nodeName,
       result,
+      rpcTrace: [trace],
     });
   } catch (error) {
     return NextResponse.json(

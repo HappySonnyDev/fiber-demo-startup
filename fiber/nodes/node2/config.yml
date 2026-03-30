@@ -68,6 +68,7 @@ ckb:
             tx_hash: 0x14f28bb0b08c6c24c73e206297a8dacb631c9bbbef1d654f105e3a61616ea36c
             index: 0x8
           dep_type: code
+      auto_accept_amount: 100000000
 
 services:
   - fiber
