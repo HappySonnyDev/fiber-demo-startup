@@ -4,6 +4,7 @@ import Link from "next/link";
 import { Zap, ArrowRight, ChevronRight, ExternalLink, Code2, Layers, Shield, Puzzle } from "lucide-react";
 import { useI18n } from "@/lib/i18n";
 import LanguageSwitcher from "@/components/LanguageSwitcher";
+import { getLocalizedText, type LocalizedText } from "@/lib/fiber-rpc-schema";
 
 // ─── 类型 ─────────────────────────────────────────────────────────────────────
 
@@ -11,7 +12,7 @@ interface FieldDef {
   field: string;
   type: string;
   required?: boolean;
-  desc: string;
+  desc: LocalizedText;
 }
 
 interface MethodDoc {
@@ -19,8 +20,8 @@ interface MethodDoc {
   name: string;
   rpcMethod: string;
   category: "channel" | "payment" | "node";
-  tagline: string;
-  description: string;
+  tagline: LocalizedText;
+  description: LocalizedText;
   signature: string;
   params: FieldDef[];
   returns: FieldDef[];
@@ -29,7 +30,7 @@ interface MethodDoc {
     response: string;
   };
   sdkExample: string;
-  notes?: string[];
+  notes?: LocalizedText[];
 }
 
 // ─── SDK 方法文档数据 ──────────────────────────────────────────────────────────
@@ -40,31 +41,30 @@ const METHODS: MethodDoc[] = [
     name: "getNodeInfo",
     rpcMethod: "node_info",
     category: "node",
-    tagline: "获取节点身份与网络信息",
-    description:
-      "获取 Fiber 节点的自身信息，包括节点公钥、版本、P2P 监听地址列表以及链上 funding lock script。是建立连接和开通通道前必须调用的基础方法。",
+    tagline: { zh: "获取节点身份与网络信息", en: "Get node identity and network info" },
+    description: { zh: "获取 Fiber 节点的自身信息，包括节点公钥、版本、P2P 监听地址列表以及链上 funding lock script。是建立连接和开通通道前必须调用的基础方法。", en: "Get Fiber node self information including node public key, version, P2P listening address list and on-chain funding lock script. Essential method before establishing connections and opening channels." },
     signature: "getNodeInfo(nodeName: string): Promise<NodeInfo>",
     params: [
       {
         field: "nodeName",
         type: "string",
         required: true,
-        desc: '节点名称，对应 NODES 配置中的键名，如 "alice" / "bob" / "charlie"',
+        desc: { zh: '节点名称，对应 NODES 配置中的键名，如 "alice" / "bob" / "charlie"', en: 'Node name, corresponding to key in NODES config, e.g. "alice" / "bob" / "charlie"' },
       },
     ],
     returns: [
-      { field: "node_id", type: "hex string", desc: "节点公钥（65 字节，压缩格式），用于节点身份识别，与 Peer ID 不同" },
-      { field: "version", type: "string", desc: 'Fiber 节点版本号，如 "0.1.0"' },
+      { field: "node_id", type: "hex string", desc: { zh: "节点公钥（65 字节，压缩格式），用于节点身份识别，与 Peer ID 不同", en: "Node public key (65 bytes, compressed format), for node identity, different from Peer ID" } },
+      { field: "version", type: "string", desc: { zh: 'Fiber 节点版本号，如 "0.1.0"', en: 'Fiber node version, e.g. "0.1.0"' } },
       {
         field: "addresses",
         type: "string[]",
-        desc: "P2P 监听地址列表，格式 /dns4/<host>/tcp/<port>/p2p/<peerId>，peerId 用于 connectPeer 和 openChannel",
+        desc: { zh: "P2P 监听地址列表，格式 /dns4/<host>/tcp/<port>/p2p/<peerId>，peerId 用于 connectPeer 和 openChannel", en: "P2P listening address list, format /dns4/<host>/tcp/<port>/p2p/<peerId>, peerId used for connectPeer and openChannel" },
       },
-      { field: "chain_hash", type: "hex string", desc: "所在链的 genesis block hash，用于区分 mainnet / testnet / devnet" },
+      { field: "chain_hash", type: "hex string", desc: { zh: "所在链的 genesis block hash，用于区分 mainnet / testnet / devnet", en: "Genesis block hash of the chain, used to distinguish mainnet / testnet / devnet" } },
       {
         field: "default_funding_lock_script",
         type: "Script",
-        desc: "节点默认的链上 lock script，其中 args 字段即节点的链上地址，预充资金时需要用到",
+        desc: { zh: "节点默认的链上 lock script，其中 args 字段即节点的链上地址，预充资金时需要用到", en: "Default on-chain lock script of the node, where args field is the node on-chain address, needed for pre-funding" },
       },
     ],
     rpcRaw: {
@@ -109,20 +109,19 @@ const lockScript = info.default_funding_lock_script;`,
     name: "connectPeer",
     rpcMethod: "connect_peer",
     category: "node",
-    tagline: "建立 P2P 握手连接",
-    description:
-      "在两个 Fiber 节点之间建立 P2P 握手连接。openChannel 前必须先调用此方法，确保双方已完成网络握手。若节点已连接，重复调用是幂等的，不会报错。",
+    tagline: { zh: "建立 P2P 握手连接", en: "Establish P2P handshake connection" },
+    description: { zh: "在两个 Fiber 节点之间建立 P2P 握手连接。openChannel 前必须先调用此方法，确保双方已完成网络握手。若节点已连接，重复调用是幂等的，不会报错。", en: "Establish P2P handshake connection between two Fiber nodes. Must call this before openChannel to ensure network handshake is complete. Idempotent if nodes are already connected." },
     signature: "connectPeer(nodeName: string, params: ConnectPeerParams): Promise<null>",
     params: [
-      { field: "nodeName", type: "string", required: true, desc: "发起连接的节点名" },
+      { field: "nodeName", type: "string", required: true, desc: { zh: "发起连接的节点名", en: "Node name initiating the connection" } },
       {
         field: "address",
         type: "string",
         required: true,
-        desc: "对端节点的完整多地址字符串，从目标节点的 node_info.addresses 获取。格式：/dns4/<host>/tcp/<port>/p2p/<peerId>",
+        desc: { zh: "对端节点的完整多地址字符串，从目标节点的 node_info.addresses 获取。格式：/dns4/<host>/tcp/<port>/p2p/<peerId>", en: "Full multiaddr string of peer node, obtained from target node node_info.addresses. Format: /dns4/<host>/tcp/<port>/p2p/<peerId>" },
       },
     ],
-    returns: [{ field: "(null)", type: "null", desc: "成功时静默返回 null，无实际返回值" }],
+    returns: [{ field: "(null)", type: "null", desc: { zh: "成功时静默返回 null，无实际返回值", en: "Returns null silently on success, no actual return value" } }],
     rpcRaw: {
       request: `{
   "jsonrpc": "2.0",
@@ -138,7 +137,7 @@ const lockScript = info.default_funding_lock_script;`,
     },
     sdkExample: `import { connectPeer, getNodeP2PAddress } from "@/lib/fiber-client";
 
-// 先获取目标节点的 P2P 地址
+// 先获取目标节点的 P2P地址
 const address = await getNodeP2PAddress("bob");
 
 // 发起连接（已连接时调用幂等）
@@ -147,9 +146,9 @@ await connectPeer("alice", { address });
 // 建议等待 1-2 秒再调用 openChannel，确保握手完成
 await new Promise(r => setTimeout(r, 2000));`,
     notes: [
-      "已连接时重复调用不会报错（幂等操作）",
-      "connect 成功后建议等待 1-2 秒再调用 openChannel，确保 P2P 握手完成",
-      "SDK 的 openChannel 内部已自动处理 connectPeer，通常不需要手动调用",
+      { zh: "已连接时重复调用不会报错（幂等操作）", en: "Repeated calls when already connected will not error (idempotent operation)" },
+      { zh: "connect 成功后建议等待 1-2 秒再调用 openChannel，确保 P2P 握手完成", en: "After successful connect, wait 1-2 seconds before calling openChannel to ensure P2P handshake is complete" },
+      { zh: "SDK 的 openChannel 内部已自动处理 connectPeer，通常不需要手动调用", en: "SDK's openChannel internally handles connectPeer automatically, usually no need to call manually" },
     ],
   },
   {
@@ -157,32 +156,31 @@ await new Promise(r => setTimeout(r, 2000));`,
     name: "openChannel",
     rpcMethod: "open_channel",
     category: "channel",
-    tagline: "开启链下支付通道",
-    description:
-      "在两个节点之间开启一条支付通道。调用后 Fiber 会自动构建链上 funding 交易并广播，等待 CKB 出块确认（约 10-20 秒）后通道变为 CHANNEL_READY 状态，此后双方可以进行链下支付。支持 CKB 和任意 UDT 资产。",
+    tagline: { zh: "开启链下支付通道", en: "Open off-chain payment channel" },
+    description: { zh: "在两个节点之间开启一条支付通道。调用后 Fiber 会自动构建链上 funding 交易并广播，等待 CKB 出块确认（约 10-20 秒）后通道变为 CHANNEL_READY 状态，此后双方可以进行链下支付。支持 CKB 和任意 UDT 资产。", en: "Open a payment channel between two nodes. Fiber automatically builds and broadcasts on-chain funding transaction. Channel becomes CHANNEL_READY after CKB block confirmation (~10-20s), then both parties can make off-chain payments. Supports CKB and any UDT assets." },
     signature: "openChannel(nodeName: string, params: OpenChannelParams): Promise<{ channel_id: string }>",
     params: [
-      { field: "nodeName", type: "string", required: true, desc: "开通通道的发起方节点名" },
+      { field: "nodeName", type: "string", required: true, desc: { zh: "开通通道的发起方节点名", en: "Node name initiating the channel opening" } },
       {
         field: "peerId",
         type: "string",
         required: true,
-        desc: "对端节点 Peer ID，从 node_info.addresses 的 /p2p/<id> 部分提取",
+        desc: { zh: "对端节点 Peer ID，从 node_info.addresses 的 /p2p/<id> 部分提取", en: "Peer ID of counterparty node, extracted from /p2p/<id> part of node_info.addresses" },
       },
       {
         field: "fundingAmount",
         type: "string | bigint",
         required: true,
-        desc: "注资金额，SDK 自动转换为十六进制 shannon 字符串。1 CKB = 10^8 shannon",
+        desc: { zh: "注资金额，SDK 自动转换为十六进制 shannon 字符串。1 CKB = 10^8 shannon", en: "Funding amount, SDK auto-converts to hex shannon string. 1 CKB = 10^8 shannon" },
       },
       {
         field: "assetType",
         type: '"CKB" | "UDT"',
         required: false,
-        desc: '资产类型，默认 "CKB"。选择 "UDT" 时 SDK 自动附加 funding_udt_type_script',
+        desc: { zh: '资产类型，默认 "CKB"。选择 "UDT" 时 SDK 自动附加 funding_udt_type_script', en: 'Asset type, default "CKB". SDK auto-attaches funding_udt_type_script when "UDT" is selected' },
       },
     ],
-    returns: [{ field: "channel_id", type: "hex string", desc: "新建通道的唯一 ID（临时 ID），用于后续 closeChannel 操作" }],
+    returns: [{ field: "channel_id", type: "hex string", desc: { zh: "新建通道的唯一 ID（临时 ID），用于后续 closeChannel 操作", en: "Unique ID of new channel (temporary ID), used for subsequent closeChannel operations" } }],
     rpcRaw: {
       request: `// 底层 RPC 调用（SDK 自动生成）
 {
@@ -223,10 +221,10 @@ await openChannel("alice", {
   assetType: "UDT",
 });`,
     notes: [
-      "底层 RPC 要求 funding_amount 为十六进制字符串，SDK 已自动处理转换",
-      "通道开启后需等待链上确认才变为 CHANNEL_READY，期间无法发起支付",
-      "UDT 通道的 type script 已内置在 SDK 中，无需手动传入",
-      "通道 ID 在 NEGOTIATING_FUNDING 阶段为临时 ID，确认后可能变更，建议通过 listChannels 重新获取",
+      { zh: "底层 RPC 要求 funding_amount 为十六进制字符串，SDK 已自动处理转换", en: "Underlying RPC requires funding_amount as hex string, SDK handles conversion automatically" },
+      { zh: "通道开启后需等待链上确认才变为 CHANNEL_READY，期间无法发起支付", en: "Channel needs on-chain confirmation to become CHANNEL_READY, cannot initiate payments during this period" },
+      { zh: "UDT 通道的 type script 已内置在 SDK 中，无需手动传入", en: "UDT channel type script is built into SDK, no need to pass manually" },
+      { zh: "通道 ID 在 NEGOTIATING_FUNDING 阶段为临时 ID，确认后可能变更，建议通过 listChannels 重新获取", en: "Channel ID is temporary during NEGOTIATING_FUNDING stage, may change after confirmation, recommend retrieving via listChannels" },
     ],
   },
   {
@@ -234,23 +232,22 @@ await openChannel("alice", {
     name: "getChannels",
     rpcMethod: "list_channels",
     category: "channel",
-    tagline: "查询节点通道列表",
-    description:
-      "获取指定节点的所有通道，包括通道状态、双方余额等信息。是监控通道健康状态、判断是否可以支付的核心查询接口。",
+    tagline: { zh: "查询节点通道列表", en: "Query node channel list" },
+    description: { zh: "获取指定节点的所有通道，包括通道状态、双方余额等信息。是监控通道健康状态、判断是否可以支付的核心查询接口。", en: "Get all channels of specified node, including channel status, both parties balances, etc. Core query interface for monitoring channel health and determining payment capability." },
     signature: "getChannels(nodeName: string): Promise<{ channels: Channel[] }>",
     params: [
-      { field: "nodeName", type: "string", required: true, desc: "要查询的节点名" },
+      { field: "nodeName", type: "string", required: true, desc: { zh: "要查询的节点名", en: "Node name to query" } },
     ],
     returns: [
-      { field: "channels", type: "Channel[]", desc: "通道数组" },
-      { field: "channels[].channel_id", type: "hex string", desc: "通道唯一 ID" },
-      { field: "channels[].peer_id", type: "string", desc: "对端节点 Peer ID" },
-      { field: "channels[].local_balance", type: "hex string", desc: "本地余额（shannon），发起支付后减少" },
-      { field: "channels[].remote_balance", type: "hex string", desc: "对端余额（shannon），收到支付后增加" },
+      { field: "channels", type: "Channel[]", desc: { zh: "通道数组", en: "Channel array" } },
+      { field: "channels[].channel_id", type: "hex string", desc: { zh: "通道唯一 ID", en: "Channel unique ID" } },
+      { field: "channels[].peer_id", type: "string", desc: { zh: "对端节点 Peer ID", en: "Counterparty node Peer ID" } },
+      { field: "channels[].local_balance", type: "hex string", desc: { zh: "本地余额（shannon），发起支付后减少", en: "Local balance (shannon), decreases after initiating payment" } },
+      { field: "channels[].remote_balance", type: "hex string", desc: { zh: "对端余额（shannon），收到支付后增加", en: "Remote balance (shannon), increases after receiving payment" } },
       {
         field: "channels[].state.state_name",
         type: "string",
-        desc: "通道状态：CHANNEL_READY（可用）/ NEGOTIATING_FUNDING（等待链上确认）/ CLOSED（已关闭）",
+        desc: { zh: "通道状态：CHANNEL_READY（可用）/ NEGOTIATING_FUNDING（等待链上确认）/ CLOSED（已关闭）", en: "Channel state: CHANNEL_READY (available) / NEGOTIATING_FUNDING (waiting on-chain confirmation) / CLOSED (closed)" },
       },
     ],
     rpcRaw: {
@@ -280,11 +277,11 @@ const { channels } = await getChannels("alice");
 for (const ch of channels) {
   const localCKB = Number(BigInt(ch.local_balance)) / 1e8;
   const isReady = ch.state.state_name === "CHANNEL_READY";
-  console.log(\`通道 \${ch.channel_id.slice(0,10)}... 本地余额: \${localCKB} CKB 状态: \${isReady ? "就绪" : "等待确认"}\`);
+  console.log(\`Channel \${ch.channel_id.slice(0,10)}... Local: \${localCKB} CKB Status: \${isReady ? "Ready" : "Waiting"}\`);
 }`,
     notes: [
-      "底层 RPC 必须传 [{}] 参数，直接传 [] 会返回 Invalid params 错误，SDK 已内部处理",
-      "local_balance 和 remote_balance 均为十六进制字符串，需转换：Number(BigInt(hex)) / 1e8 得到 CKB 数量",
+      { zh: "底层 RPC 必须传 [{}] 参数，直接传 [] 会返回 Invalid params 错误，SDK 已内部处理", en: "Underlying RPC must pass [{}] as parameter, passing [] returns Invalid params error, SDK handles this internally" },
+      { zh: "local_balance 和 remote_balance 均为十六进制字符串，需转换：Number(BigInt(hex)) / 1e8 得到 CKB 数量", en: "local_balance and remote_balance are hex strings, convert via: Number(BigInt(hex)) / 1e8 to get CKB amount" },
     ],
   },
   {
@@ -292,29 +289,28 @@ for (const ch of channels) {
     name: "createInvoice",
     rpcMethod: "new_invoice",
     category: "payment",
-    tagline: "收款方生成支付发票",
-    description:
-      "由收款方调用，生成一张支付发票字符串（invoice）。付款方拿到发票字符串后调用 payInvoice 即可完成支付。支持设置金额、描述、有效期。同一张发票只能被成功支付一次，payment_hash 保证唯一性。",
+    tagline: { zh: "收款方生成支付发票", en: "Payee generates payment invoice" },
+    description: { zh: "由收款方调用，生成一张支付发票字符串（invoice）。付款方拿到发票字符串后调用 payInvoice 即可完成支付。支持设置金额、描述、有效期。同一张发票只能被成功支付一次，payment_hash 保证唯一性。", en: "Called by payee to generate a payment invoice string. Payer calls payInvoice with this string to complete payment. Supports setting amount, description, expiry. Same invoice can only be paid once successfully, payment_hash guarantees uniqueness." },
     signature: "createInvoice(nodeName: string, params: CreateInvoiceParams): Promise<{ invoice_address: string }>",
     params: [
-      { field: "nodeName", type: "string", required: true, desc: "收款方节点名" },
+      { field: "nodeName", type: "string", required: true, desc: { zh: "收款方节点名", en: "Payee node name" } },
       {
         field: "amount",
         type: "string | bigint",
         required: true,
-        desc: "收款金额，SDK 自动转换为十六进制。CKB 单位为 shannon，UDT 为 token 基本单位",
+        desc: { zh: "收款金额，SDK 自动转换为十六进制。CKB 单位为 shannon，UDT 为 token 基本单位", en: "Payment amount, SDK auto-converts to hex. CKB unit is shannon, UDT is token base unit" },
       },
-      { field: "description", type: "string", required: false, desc: '发票描述，如订单号或备注，默认 "Payment"' },
-      { field: "expiry", type: "number", required: false, desc: "发票有效期（秒），默认 3600 秒" },
-      { field: "assetType", type: '"CKB" | "UDT"', required: false, desc: '资产类型，默认 "CKB"' },
+      { field: "description", type: "string", required: false, desc: { zh: '发票描述，如订单号或备注，默认 "Payment"', en: 'Invoice description, e.g. order number or note, default "Payment"' } },
+      { field: "expiry", type: "number", required: false, desc: { zh: "发票有效期（秒），默认 3600 秒", en: "Invoice expiry time (seconds), default 3600 seconds" } },
+      { field: "assetType", type: '"CKB" | "UDT"', required: false, desc: { zh: '资产类型，默认 "CKB"', en: 'Asset type, default "CKB"' } },
     ],
     returns: [
       {
         field: "invoice_address",
         type: "string",
-        desc: '发票字符串（devnet 以 "fibd1..." 开头），付款方通过此字符串调用 payInvoice',
+        desc: { zh: '发票字符串（devnet 以 "fibd1..." 开头），付款方通过此字符串调用 payInvoice', en: 'Invoice string (devnet starts with "fibd1..."), payer calls payInvoice with this string' },
       },
-      { field: "invoice", type: "object", desc: "发票详细信息对象，含 payment_hash、amount、expiry 等字段" },
+      { field: "invoice", type: "object", desc: { zh: "发票详细信息对象，含 payment_hash、amount、expiry 等字段", en: "Invoice details object, contains payment_hash, amount, expiry, etc." } },
     ],
     rpcRaw: {
       request: `// 底层 RPC 调用（SDK 自动生成）
@@ -324,7 +320,7 @@ for (const ch of channels) {
   "params": [{
     "amount": "0x64",       // SDK 自动转换
     "currency": "Fibd",     // SDK 自动注入，devnet 固定值
-    "description": "订单 #1001",
+    "description": "Order #1001",
     "expiry": "0xe10"       // SDK 自动转换为十六进制
   }],
   "id": 1
@@ -346,17 +342,17 @@ for (const ch of channels) {
 // 收款方（charlie）生成发票，收取 100 shannon 的 CKB
 const result = await createInvoice("charlie", {
   amount: "100",
-  description: "订单 #1001",
+  description: "Order #1001",
   expiry: 3600,
   assetType: "CKB",
 });
 
 const invoiceStr = result.invoice_address; // "fibd1qp..."
-// 将 invoiceStr 传递给付款方`,
+// Pass invoiceStr to payer`,
     notes: [
-      'currency 字段底层 RPC 必填，SDK 已根据 devnet 自动注入 "Fibd"，无需手动传',
-      "amount 和 expiry 底层要求十六进制字符串，SDK 自动处理，传普通数字即可",
-      "同一张发票只能支付一次，需要再次收款请重新生成新发票",
+      { zh: 'currency 字段底层 RPC 必填，SDK 已根据 devnet 自动注入 "Fibd"，无需手动传', en: 'currency field is required by underlying RPC, SDK auto-injects "Fibd" for devnet, no need to pass manually' },
+      { zh: "amount 和 expiry 底层要求十六进制字符串，SDK 自动处理，传普通数字即可", en: "amount and expiry require hex strings at underlying level, SDK handles automatically, just pass regular numbers" },
+      { zh: "同一张发票只能支付一次，需要再次收款请重新生成新发票", en: "Same invoice can only be paid once, generate new invoice for subsequent payments" },
     ],
   },
   {
@@ -364,24 +360,23 @@ const invoiceStr = result.invoice_address; // "fibd1qp..."
     name: "payInvoice",
     rpcMethod: "send_payment",
     category: "payment",
-    tagline: "付款方发起链下支付",
-    description:
-      "由付款方调用，通过发票字符串发起链下支付。Fiber 自动进行多跳路由寻路，无需链上交易，通常在毫秒至秒级内完成。支付成功后，路径上所有通道的余额同步更新。",
+    tagline: { zh: "付款方发起链下支付", en: "Payer initiates off-chain payment" },
+    description: { zh: "由付款方调用，通过发票字符串发起链下支付。Fiber 自动进行多跳路由寻路，无需链上交易，通常在毫秒至秒级内完成。支付成功后，路径上所有通道的余额同步更新。", en: "Called by payer to initiate off-chain payment via invoice string. Fiber auto-routes multi-hop, no on-chain transaction needed, typically completes in milliseconds to seconds. After successful payment, balances on all channels along the path are updated synchronously." },
     signature: "payInvoice(nodeName: string, params: PayInvoiceParams): Promise<PaymentResult>",
     params: [
-      { field: "nodeName", type: "string", required: true, desc: "付款方节点名" },
+      { field: "nodeName", type: "string", required: true, desc: { zh: "付款方节点名", en: "Payer node name" } },
       {
         field: "invoice",
         type: "string",
         required: true,
-        desc: '目标发票字符串，由收款方通过 createInvoice 生成（如 "fibd1..."）',
+        desc: { zh: '目标发票字符串，由收款方通过 createInvoice 生成（如 "fibd1..."）', en: 'Target invoice string, generated by payee via createInvoice (e.g. "fibd1...")' },
       },
     ],
     returns: [
-      { field: "payment_hash", type: "hex string", desc: "支付哈希，唯一标识本次支付" },
-      { field: "status", type: "string", desc: "支付状态：Success / Pending / Failed" },
-      { field: "fee", type: "hex string", desc: "实际扣除的路由手续费（shannon）" },
-      { field: "failed_error", type: "string", desc: "若支付失败，此处包含失败原因（如余额不足、无可用路由）" },
+      { field: "payment_hash", type: "hex string", desc: { zh: "支付哈希，唯一标识本次支付", en: "Payment hash, unique identifier for this payment" } },
+      { field: "status", type: "string", desc: { zh: "支付状态：Success / Pending / Failed", en: "Payment status: Success / Pending / Failed" } },
+      { field: "fee", type: "hex string", desc: { zh: "实际扣除的路由手续费（shannon）", en: "Actual routing fee deducted (shannon)" } },
+      { field: "failed_error", type: "string", desc: { zh: "若支付失败，此处包含失败原因（如余额不足、无可用路由）", en: "If payment fails, contains failure reason (e.g. insufficient balance, no available route)" } },
     ],
     rpcRaw: {
       request: `{
@@ -405,19 +400,19 @@ const invoiceStr = result.invoice_address; // "fibd1qp..."
 
 // 付款方（alice）支付发票
 const result = await payInvoice("alice", {
-  invoice: "fibd1qp...",  // 从收款方获取的发票字符串
+  invoice: "fibd1qp...",  // Invoice string from payee
 });
 
 if (result.status === "Success") {
-  console.log("支付成功！payment_hash:", result.payment_hash);
+  console.log("Payment success! payment_hash:", result.payment_hash);
 } else {
-  console.error("支付失败：", result.failed_error);
+  console.error("Payment failed:", result.failed_error);
 }`,
     notes: [
-      "支付为纯链下操作，不需要链上交易确认，通常毫秒至秒级完成",
-      "Fiber 支持多跳路由，alice 和 charlie 之间即使没有直接通道，只要路径连通也可支付",
-      "同一张发票只能成功支付一次，重复支付会返回错误",
-      "支付失败时 failed_error 会说明原因：余额不足、无可用路由、发票过期等",
+      { zh: "支付为纯链下操作，不需要链上交易确认，通常毫秒至秒级完成", en: "Payment is pure off-chain operation, no on-chain transaction confirmation needed, typically completes in milliseconds to seconds" },
+      { zh: "Fiber 支持多跳路由，alice 和 charlie 之间即使没有直接通道，只要路径连通也可支付", en: "Fiber supports multi-hop routing, even without direct channel between alice and charlie, payment works as long as path is connected" },
+      { zh: "同一张发票只能成功支付一次，重复支付会返回错误", en: "Same invoice can only be successfully paid once, repeated payment returns error" },
+      { zh: "支付失败时 failed_error 会说明原因：余额不足、无可用路由、发票过期等", en: "When payment fails, failed_error explains reason: insufficient balance, no available route, invoice expired, etc." },
     ],
   },
   {
@@ -425,20 +420,19 @@ if (result.status === "Success") {
     name: "closeChannel",
     rpcMethod: "shutdown_channel",
     category: "channel",
-    tagline: "关闭通道并结算到链上",
-    description:
-      "发起通道关闭流程，将通道内双方最新余额结算为链上 CKB/UDT。关闭需要双方协同签名，资金会分别归还到各自的 close_script 地址。结算交易需要链上确认，约需 10-30 秒。",
+    tagline: { zh: "关闭通道并结算到链上", en: "Close channel and settle on-chain" },
+    description: { zh: "发起通道关闭流程，将通道内双方最新余额结算为链上 CKB/UDT。关闭需要双方协同签名，资金会分别归还到各自的 close_script 地址。结算交易需要链上确认，约需 10-30 秒。", en: "Initiate channel closing process, settle both parties latest balances as on-chain CKB/UDT. Closing requires both parties coordinated signatures, funds return to respective close_script addresses. Settlement transaction needs on-chain confirmation, approx 10-30s." },
     signature: "closeChannel(nodeName: string, channelId: string): Promise<null>",
     params: [
-      { field: "nodeName", type: "string", required: true, desc: "发起关闭的节点名" },
+      { field: "nodeName", type: "string", required: true, desc: { zh: "发起关闭的节点名", en: "Node name initiating the close" } },
       {
         field: "channelId",
         type: "hex string",
         required: true,
-        desc: "要关闭的通道 ID，从 getChannels 获取",
+        desc: { zh: "要关闭的通道 ID，从 getChannels 获取", en: "Channel ID to close, obtained from getChannels" },
       },
     ],
-    returns: [{ field: "(null)", type: "null", desc: "成功则通道进入关闭协商流程，资金最终结算到链上" }],
+    returns: [{ field: "(null)", type: "null", desc: { zh: "成功则通道进入关闭协商流程，资金最终结算到链上", en: "On success, channel enters closing negotiation process, funds eventually settle on-chain" } }],
     rpcRaw: {
       request: `// 底层 RPC 调用（SDK 自动填充 close_script 和 fee_rate）
 {
@@ -461,21 +455,21 @@ if (result.status === "Success") {
     },
     sdkExample: `import { getChannels, closeChannel } from "@/lib/fiber-client";
 
-// 先获取通道列表
+// Get channel list first
 const { channels } = await getChannels("alice");
 const readyChannels = channels.filter(
   ch => ch.state.state_name === "CHANNEL_READY"
 );
 
-// 关闭第一个就绪的通道
+// Close first ready channel
 if (readyChannels.length > 0) {
   await closeChannel("alice", readyChannels[0].channel_id);
-  console.log("通道关闭中，资金将结算到链上...");
+  console.log("Channel closing, funds will settle on-chain...");
 }`,
     notes: [
-      "只有 CHANNEL_READY 状态的通道才能关闭",
-      "底层 RPC 需要 close_script 和 fee_rate，SDK 已内置默认值，无需手动传入",
-      "结算后双方链上余额会增加，可通过 CKB RPC get_cells_capacity 查询",
+      { zh: "只有 CHANNEL_READY 状态的通道才能关闭", en: "Only CHANNEL_READY state channels can be closed" },
+      { zh: "底层 RPC 需要 close_script 和 fee_rate，SDK 已内置默认值，无需手动传入", en: "Underlying RPC requires close_script and fee_rate, SDK has built-in defaults, no need to pass manually" },
+      { zh: "结算后双方链上余额会增加，可通过 CKB RPC get_cells_capacity 查询", en: "After settlement, both parties on-chain balances increase, can query via CKB RPC get_cells_capacity" },
     ],
   },
 ];
@@ -512,7 +506,7 @@ function CodeBlock({ code, lang = "json" }: { code: string; lang?: string }) {
 // ─── 字段表格 ─────────────────────────────────────────────────────────────────
 
 function FieldTable({ fields, title }: { fields: FieldDef[]; title: string }) {
-  const { t } = useI18n();
+  const { t, lang } = useI18n();
   if (fields.length === 0) return (
     <div>
       <div className="text-xs font-semibold text-[#666] uppercase tracking-wider mb-2">{title}</div>
@@ -536,7 +530,7 @@ function FieldTable({ fields, title }: { fields: FieldDef[]; title: string }) {
             <span className={`text-[10px] ${f.required ? "text-red-400" : "text-[#444]"}`}>
               {f.required ? t('docs.required') : "—"}
             </span>
-            <span className="text-[#888] leading-relaxed">{f.desc}</span>
+            <span className="text-[#888] leading-relaxed">{getLocalizedText(f.desc, lang)}</span>
           </div>
         ))}
       </div>
@@ -752,7 +746,7 @@ console.log(result.channel_id);`}</pre>
 // ─── 方法详情页 ───────────────────────────────────────────────────────────────
 
 function MethodPage({ method }: { method: MethodDoc }) {
-  const { t } = useI18n();
+  const { t, lang } = useI18n();
   const [tab, setTab] = useState<"sdk" | "rpc">("sdk");
   const categoryLabels = {
     channel: t('docs.channelCategory'),
@@ -770,11 +764,11 @@ function MethodPage({ method }: { method: MethodDoc }) {
           <span className="text-[10px] text-[#555]">RPC → <code className="text-[#888]">{method.rpcMethod}</code></span>
         </div>
         <h1 className="text-2xl font-bold text-white font-mono mb-1">{method.name}()</h1>
-        <p className="text-[#666] text-sm">{method.tagline}</p>
+        <p className="text-[#666] text-sm">{getLocalizedText(method.tagline, lang)}</p>
       </div>
 
       {/* 描述 */}
-      <p className="text-[#888] text-sm leading-relaxed border-l-2 border-[#3e3e42] pl-4">{method.description}</p>
+      <p className="text-[#888] text-sm leading-relaxed border-l-2 border-[#3e3e42] pl-4">{getLocalizedText(method.description, lang)}</p>
 
       {/* 签名 */}
       <div>
@@ -822,10 +816,10 @@ function MethodPage({ method }: { method: MethodDoc }) {
             <span>⚠</span> {t('docs.notes')}
           </div>
           <ul className="space-y-2">
-            {method.notes.map((n) => (
-              <li key={n} className="flex items-start gap-2 text-xs text-[#888]">
+            {method.notes.map((n, i) => (
+              <li key={i} className="flex items-start gap-2 text-xs text-[#888]">
                 <ChevronRight className="w-3 h-3 text-yellow-500/50 shrink-0 mt-0.5" />
-                {n}
+                {getLocalizedText(n, lang)}
               </li>
             ))}
           </ul>

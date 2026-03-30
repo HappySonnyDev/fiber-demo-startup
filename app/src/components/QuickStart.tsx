@@ -1,130 +1,29 @@
+/**
+ * QuickStart 主组件
+ */
+
 'use client';
 
 import React, { useState, useEffect, useCallback } from 'react';
-import { Highlight, themes } from 'prism-react-renderer';
-import { 
-  Zap, Play, Check, RefreshCw, Copy, CheckCircle, 
+import {
+  Zap, Play, Check, RefreshCw, CheckCircle,
   ChevronRight, ChevronDown, Terminal, ArrowRight
 } from 'lucide-react';
-import type { RpcTrace } from '@/lib/fiber-client';
+import type { RpcTrace } from '@/types';
 import { useI18n } from '@/lib/i18n';
+import { CodeBlock } from './quickstart/CodeBlock';
+import { SDK_EXAMPLES } from './quickstart/constants';
 
 type QuickStartStep = 1 | 2 | 3;
 
 interface StepStatus {
   completed: boolean;
   inProgress: boolean;
-  waiting?: boolean; // 等待通道就绪
+  waiting?: boolean;
   rpcTrace?: RpcTrace[];
 }
 
-interface QuickStartProps {
-  onBack: () => void;
-}
-
-const SDK_EXAMPLES = {
-  step1: {
-    title: 'Step 1: P2P 连接',
-    subtitle: '让 Alice 连接 Bob 的 P2P 网络',
-    code: `import { connectPeer, getNodeP2PAddress } from '@/lib/fiber-client';
-
-// 1. 获取 Bob 的 P2P 地址
-const bobAddress = await getNodeP2PAddress('bob');
-// 返回: "/dns4/node2/tcp/10002/p2p/QmXxx..."
-
-// 2. Alice 连接 Bob
-await connectPeer('alice', { address: bobAddress });
-// RPC: connect_peer { address: "..." }`,
-  },
-  step2: {
-    title: 'Step 2: 建立通道',
-    subtitle: 'Alice 向 Bob 开启支付通道（100 CKB）',
-    code: `import { openChannel, getNodeP2PAddress } from '@/lib/fiber-client';
-
-// 1. 获取 Bob 的 Peer ID
-const bobAddress = await getNodeP2PAddress('bob');
-const peerId = bobAddress.split('/p2p/')[1];
-
-// 2. Alice 开启通道（100 CKB = 10^10 shannon）
-const result = await openChannel('alice', {
-  peerId,
-  fundingAmount: '10000000000',
-  assetType: 'CKB'
-});
-// 返回: { channel_id: "0x..." }`,
-  },
-  step3: {
-    title: 'Step 3: 链下支付',
-    subtitle: 'Alice 向 Bob 发送 10 CKB',
-    code: `import { createInvoice, payInvoice } from '@/lib/fiber-client';
-
-// 1. Bob 生成发票（收款方）
-const invoiceResult = await createInvoice('bob', {
-  amount: '1000000000', // 10 CKB
-  description: 'Quick Start Demo',
-  assetType: 'CKB'
-});
-const invoice = invoiceResult.invoice_address;
-
-// 2. Alice 支付（付款方）
-await payInvoice('alice', { invoice });
-// 支付成功！余额实时更新`,
-  },
-};
-
-// 自定义代码主题 - GitHub Dark 风格
-const customTheme = {
-  plain: {
-    color: '#e6edf3',
-    backgroundColor: '#0d1117',
-  },
-  styles: [
-    { types: ['comment'], style: { color: '#8b949e', fontStyle: 'italic' as const } },
-    { types: ['string'], style: { color: '#a5d6ff' } },
-    { types: ['keyword'], style: { color: '#ff7b72' } },
-    { types: ['function'], style: { color: '#d2a8ff' } },
-    { types: ['number'], style: { color: '#79c0ff' } },
-    { types: ['operator'], style: { color: '#79c0ff' } },
-    { types: ['punctuation'], style: { color: '#8b949e' } },
-    { types: ['constant'], style: { color: '#79c0ff' } },
-    { types: ['import'], style: { color: '#ff7b72' } },
-  ],
-};
-
-function CodeBlock({ code, onCopy, copied }: { code: string; onCopy: () => void; copied: boolean }) {
-  return (
-    <div className="relative group">
-      <button
-        onClick={onCopy}
-        className="absolute top-3 right-3 z-10 p-2 rounded-lg bg-[#161b22] hover:bg-[#21262d] text-[#8b949e] hover:text-white transition-all opacity-0 group-hover:opacity-100 border border-[#30363d]"
-      >
-        {copied ? <CheckCircle className="w-4 h-4 text-[#3fb950]" /> : <Copy className="w-4 h-4" />}
-      </button>
-      
-      <Highlight theme={customTheme} code={code} language="typescript">
-        {({ className, style, tokens, getLineProps, getTokenProps }) => (
-          <pre 
-            className={`${className} text-[13px] leading-6 p-4 rounded-lg border border-[#30363d] whitespace-pre-wrap break-all`}
-            style={style}
-          >
-            {tokens.map((line, i) => (
-              <div key={i} {...getLineProps({ line })} className="table-row">
-                <span className="table-cell text-[#484f58] select-none pr-4 text-right w-8 text-xs">{i + 1}</span>
-                <span className="table-cell">
-                  {line.map((token, key) => (
-                    <span key={key} {...getTokenProps({ token })} />
-                  ))}
-                </span>
-              </div>
-            ))}
-          </pre>
-        )}
-      </Highlight>
-    </div>
-  );
-}
-
-export default function QuickStart({ onBack }: QuickStartProps) {
+export default function QuickStart() {
   const { t } = useI18n();
   const [currentStep, setCurrentStep] = useState<QuickStartStep>(1);
   const [stepStatuses, setStepStatuses] = useState<Record<number, StepStatus>>({
@@ -142,19 +41,14 @@ export default function QuickStart({ onBack }: QuickStartProps) {
     try {
       const res = await fetch('/api/channels');
       const data = await res.json();
-      console.log('Channel data:', JSON.stringify(data, null, 2));
       if (data.nodes) {
         const aliceNode = data.nodes.find((n: { name: string }) => n.name === 'alice');
         const aliceChannels = aliceNode?.channels || [];
-        console.log('Alice channels:', aliceChannels.length, aliceChannels);
         
-        // 检查是否有任何通道（不管状态）
         if (aliceChannels.length > 0) {
-          // 检查通道状态 - 支持多种字段格式
           const readyChannel = aliceChannels.find((ch: Record<string, unknown>) => {
             const state = ch.state as Record<string, unknown> | undefined;
             const stateName = state?.state_name || (ch as Record<string, unknown>).state_name;
-            console.log('Channel state:', stateName, ch);
             return stateName === 'CHANNEL_READY';
           });
           return !!readyChannel;
@@ -172,14 +66,11 @@ export default function QuickStart({ onBack }: QuickStartProps) {
       ...prev,
       2: { ...prev[2], waiting: true },
     }));
-    
-    // 轮询检查通道状态，最多等待 120 秒
+
     for (let i = 0; i < 40; i++) {
       await new Promise(resolve => setTimeout(resolve, 3000));
-      console.log(`Checking channel ready... attempt ${i + 1}/40`);
       const ready = await checkChannelReady();
       if (ready) {
-        console.log('Channel is ready!');
         setChannelReady(true);
         setStepStatuses(prev => ({
           ...prev,
@@ -189,8 +80,7 @@ export default function QuickStart({ onBack }: QuickStartProps) {
         return;
       }
     }
-    // 超时
-    console.log('Channel ready timeout');
+    
     setStepStatuses(prev => ({
       ...prev,
       2: { ...prev[2], waiting: false, inProgress: false },
@@ -251,12 +141,10 @@ export default function QuickStart({ onBack }: QuickStartProps) {
               )
             );
             if (aliceChannels.length > 0) {
-              // 等待关闭操作广播
               await new Promise(resolve => setTimeout(resolve, 2000));
             }
           }
         } catch {}
-        // 重置 channelReady 状态
         setChannelReady(false);
 
         response = await fetch('/api/channels/open', {
@@ -277,7 +165,6 @@ export default function QuickStart({ onBack }: QuickStartProps) {
             ...prev,
             [step]: { ...prev[step], rpcTrace: traces },
           }));
-          // 通道建立后等待就绪
           await waitForChannelReady();
           return;
         } else {
@@ -339,8 +226,7 @@ export default function QuickStart({ onBack }: QuickStartProps) {
 
   const currentExample = SDK_EXAMPLES[`step${currentStep}` as keyof typeof SDK_EXAMPLES];
   
-  // 步骤标签翻译
-  const stepLabels = [t('quickstart.step1.title'), t('quickstart.step2.title'), t('quickstart.step3.title')];
+  const stepLabels = [t('home.quickStart.step1'), t('home.quickStart.step2'), t('home.quickStart.step3')];
 
   const canExecute = useCallback((step: QuickStartStep) => {
     if (!nodesOnline.alice || !nodesOnline.bob) return false;
@@ -363,31 +249,31 @@ export default function QuickStart({ onBack }: QuickStartProps) {
           </div>
           <p className="text-xs text-[#8b949e] mt-1">{t('quickstart.subtitle')}</p>
         </div>
-        
+
         <div className="flex-1 p-3 space-y-1">
           {[1, 2, 3].map((step) => {
             const status = stepStatuses[step];
             const isCurrent = currentStep === step;
             const stepLabel = [t('home.quickStart.step1'), t('home.quickStart.step2'), t('home.quickStart.step3')][step - 1];
-            
+
             return (
               <button
                 key={step}
                 onClick={() => setCurrentStep(step as QuickStartStep)}
                 className={`w-full text-left p-3 rounded-lg transition-all ${
-                  isCurrent 
-                    ? 'bg-[#1f6feb]/10 border border-[#1f6feb]/50' 
-                    : status.completed 
-                      ? 'bg-[#238636]/10 border border-[#238636]/30' 
+                  isCurrent
+                    ? 'bg-[#1f6feb]/10 border border-[#1f6feb]/50'
+                    : status.completed
+                      ? 'bg-[#238636]/10 border border-[#238636]/30'
                       : 'hover:bg-[#161b22] border border-transparent'
                 }`}
               >
                 <div className="flex items-center gap-3">
                   <div className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-semibold ${
-                    status.completed 
-                      ? 'bg-[#238636] text-white' 
-                      : isCurrent 
-                        ? 'bg-[#1f6feb] text-white' 
+                    status.completed
+                      ? 'bg-[#238636] text-white'
+                      : isCurrent
+                        ? 'bg-[#1f6feb] text-white'
                         : 'bg-[#21262d] text-[#8b949e]'
                   }`}>
                     {status.completed ? <Check className="w-3 h-3" /> : step}
@@ -425,59 +311,8 @@ export default function QuickStart({ onBack }: QuickStartProps) {
 
       {/* 中间：拓扑图 + 操作 */}
       <div className="flex-1 flex flex-col">
-        {/* 拓扑图区域 */}
         <div className="flex-1 flex items-center justify-center p-8">
-          <div className="relative flex items-start gap-28 pt-0">
-            {/* 连接线 - 在两个正方形中间 */}
-            <div className="absolute top-10 left-20 right-20 h-[2px] bg-[#21262d]">
-              {stepStatuses[1].completed && (
-                <div className={`h-full transition-all duration-500 ${
-                  stepStatuses[2].completed ? 'bg-[#238636]' : 'bg-[#1f6feb]'
-                }`} style={{ width: '100%' }} />
-              )}
-              {stepStatuses[1].inProgress && (
-                <div className="h-full w-1/2 bg-[#1f6feb] animate-pulse" />
-              )}
-            </div>
-
-            {/* Alice */}
-            <div className="flex flex-col items-center relative z-10">
-              <div className={`w-20 h-20 rounded-xl flex items-center justify-center border-2 transition-all ${
-                nodesOnline.alice 
-                  ? 'bg-[#161b22] border-[#30363d] shadow-lg' 
-                  : 'bg-[#0d1117] border-[#21262d]'
-              } ${currentStep === 1 && stepStatuses[1].inProgress ? 'ring-2 ring-[#1f6feb] ring-opacity-50' : ''}`}>
-                <span className="text-2xl font-bold text-white">A</span>
-              </div>
-              <div className="mt-2.5 text-center">
-                <span className="text-sm font-medium text-white">Alice</span>
-                <p className="text-[10px] text-[#6e7681]">{t('quickstart.alice')}</p>
-              </div>
-            </div>
-
-            {/* Bob */}
-            <div className="flex flex-col items-center relative z-10">
-              <div className={`w-20 h-20 rounded-xl flex items-center justify-center border-2 transition-all ${
-                nodesOnline.bob 
-                  ? 'bg-[#161b22] border-[#30363d] shadow-lg' 
-                  : 'bg-[#0d1117] border-[#21262d]'
-              } ${currentStep === 1 && stepStatuses[1].inProgress ? 'ring-2 ring-[#1f6feb] ring-opacity-50' : ''}`}>
-                <span className="text-2xl font-bold text-white">B</span>
-              </div>
-              <div className="mt-2.5 text-center">
-                <span className="text-sm font-medium text-white">Bob</span>
-                <p className="text-[10px] text-[#6e7681]">{t('quickstart.bob')}</p>
-              </div>
-            </div>
-
-            {/* 状态指示 */}
-            {stepStatuses[2].completed && (
-              <div className="absolute -bottom-10 left-1/2 -translate-x-1/2 flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-[#238636]/10 border border-[#238636]/30">
-                <CheckCircle className="w-3.5 h-3.5 text-[#3fb950]" />
-                <span className="text-xs text-[#3fb950] font-medium">{t('quickstart.channelEstablished')}</span>
-              </div>
-            )}
-          </div>
+          <TopologyView stepStatuses={stepStatuses} nodesOnline={nodesOnline} currentStep={currentStep} />
         </div>
 
         {/* 操作面板 */}
@@ -513,100 +348,258 @@ export default function QuickStart({ onBack }: QuickStartProps) {
               </button>
             </div>
 
-            {!nodesOnline.alice || !nodesOnline.bob ? (
-              <div className="flex items-center gap-2 text-xs text-[#d29922] bg-[#d29922]/10 rounded-lg px-3 py-2 border border-[#d29922]/20">
-                <Terminal className="w-3.5 h-3.5" />
-                {t('quickstart.dockerHint')}
-              </div>
-            ) : stepStatuses[2].waiting ? (
-              <div className="flex items-center gap-2 text-xs text-[#d29922] bg-[#d29922]/10 rounded-lg px-3 py-2 border border-[#d29922]/20">
-                <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                {t('quickstart.channelWaitingHint')}
-              </div>
-            ) : allCompleted ? (
-              <div className="flex items-center gap-2 text-xs text-[#3fb950] bg-[#238636]/10 rounded-lg px-3 py-2 border border-[#238636]/20">
-                <CheckCircle className="w-3.5 h-3.5" />
-                {t('quickstart.allCompleted')}
-              </div>
-            ) : currentStep === 3 && !channelReady ? (
-              <div className="text-xs text-[#6e7681] bg-[#161b22] rounded-lg px-3 py-2 border border-[#21262d]">
-                {t('quickstart.waitForChannel')}
-              </div>
-            ) : !canExecute(currentStep) ? (
-              <div className="text-xs text-[#6e7681] bg-[#161b22] rounded-lg px-3 py-2 border border-[#21262d]">
-                {t('quickstart.completePrevSteps')}
-              </div>
-            ) : null}
+            <StatusHint
+              nodesOnline={nodesOnline}
+              stepStatuses={stepStatuses}
+              channelReady={channelReady}
+              allCompleted={allCompleted}
+              currentStep={currentStep}
+              canExecute={canExecute(currentStep)}
+            />
           </div>
         </div>
       </div>
 
       {/* 右侧：代码面板 */}
       <div className="w-[380px] bg-[#010409] border-l border-[#21262d] flex flex-col">
-        {/* 标题栏 */}
         <div className="flex items-center gap-2 px-4 py-3 border-b border-[#21262d]">
           <Terminal className="w-4 h-4 text-[#8b949e]" />
           <span className="text-sm font-medium text-white">{t('quickstart.sdkCode')}</span>
           <span className="ml-auto text-[10px] text-[#6e7681] bg-[#161b22] px-2 py-0.5 rounded border border-[#21262d]">TS</span>
         </div>
 
-        {/* 代码内容 */}
         <div className="flex-1 overflow-y-auto p-4">
           <CodeBlock code={currentExample.code} onCopy={copyCode} copied={copied} />
 
           {/* RPC 调用记录 */}
           {stepStatuses[currentStep].rpcTrace && stepStatuses[currentStep].rpcTrace!.length > 0 && (
-            <div className="mt-4">
-              <div className="flex items-center gap-1.5 text-[10px] text-[#6e7681] mb-2 uppercase tracking-wider font-medium">
-                <Zap className="w-3 h-3" /> {t('quickstart.rpcCall')}
-              </div>
-              <div className="space-y-2">
-                {stepStatuses[currentStep].rpcTrace!.map((trace, idx) => (
-                  <div key={idx} className="bg-[#0d1117] rounded-lg border border-[#21262d] overflow-hidden">
-                    <button
-                      className="w-full flex items-center gap-2 px-3 py-2.5 hover:bg-[#161b22] transition-colors"
-                      onClick={() => setExpandedRpc(expandedRpc === `${currentStep}-${idx}` ? null : `${currentStep}-${idx}`)}
-                    >
-                      {expandedRpc === `${currentStep}-${idx}` ? (
-                        <ChevronDown className="w-3.5 h-3.5 text-[#6e7681]" />
-                      ) : (
-                        <ChevronRight className="w-3.5 h-3.5 text-[#6e7681]" />
-                      )}
-                      <span className="text-[#58a6ff] font-mono text-xs">{trace.method}</span>
-                      {trace.error ? (
-                        <span className="ml-auto text-[10px] text-[#f85149] bg-[#f85149]/10 px-1.5 py-0.5 rounded">{t('output.error')}</span>
-                      ) : (
-                        <span className="ml-auto text-[10px] text-[#3fb950] bg-[#238636]/10 px-1.5 py-0.5 rounded">{trace.durationMs}ms</span>
-                      )}
-                    </button>
-                    {expandedRpc === `${currentStep}-${idx}` && (
-                      <div className="px-3 pb-3 space-y-2">
-                        <div>
-                          <div className="text-[10px] text-[#d29922] mb-1 font-medium">{t('output.request')}</div>
-                          <pre className="text-[11px] text-[#e6edf3] bg-[#161b22] rounded-md p-2.5 overflow-x-auto border border-[#21262d]">
-                            {JSON.stringify(trace.params, null, 2)}
-                          </pre>
-                        </div>
-                        <div>
-                          <div className={`text-[10px] mb-1 font-medium ${trace.error ? 'text-[#f85149]' : 'text-[#3fb950]'}`}>
-                            {trace.error ? t('output.error') : t('output.response')}
-                          </div>
-                          <pre className={`text-[11px] rounded-md p-2.5 overflow-x-auto border ${
-                            trace.error 
-                              ? 'text-[#f85149] bg-[#f85149]/5 border-[#f85149]/20' 
-                              : 'text-[#e6edf3] bg-[#161b22] border-[#21262d]'
-                          }`}>
-                            {trace.error || JSON.stringify(trace.result, null, 2)}
-                          </pre>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </div>
+            <RpcTracePanel
+              traces={stepStatuses[currentStep].rpcTrace!}
+              expandedRpc={expandedRpc}
+              currentStep={currentStep}
+              setExpandedRpc={setExpandedRpc}
+            />
           )}
         </div>
+      </div>
+    </div>
+  );
+}
+
+function TopologyView({
+  stepStatuses,
+  nodesOnline,
+  currentStep,
+}: {
+  stepStatuses: Record<number, StepStatus>;
+  nodesOnline: { alice: boolean; bob: boolean };
+  currentStep: QuickStartStep;
+}) {
+  const { t } = useI18n();
+
+  // P2P 连接完成但未建立通道
+  const p2pConnected = stepStatuses[1].completed && !stepStatuses[2].completed;
+  // 通道已建立
+  const channelEstablished = stepStatuses[2].completed;
+
+  return (
+    <div className="relative flex items-start gap-28 pt-0">
+      {/* 背景基线 */}
+      <div className="absolute top-10 left-20 right-20 h-[2px] bg-[#21262d]" />
+
+      {/* P2P 连接层 - 虚线 */}
+      <div className="absolute top-10 left-20 right-20 h-[2px]">
+        {/* 默认虚线背景 */}
+        <div className="absolute inset-0 border-t-2 border-dashed border-[#30363d]" />
+
+        {/* P2P 连接成功 - 蓝色虚线 */}
+        {stepStatuses[1].completed && (
+          <div className="absolute inset-0 border-t-2 border-dashed border-[#1f6feb] transition-all duration-500" />
+        )}
+
+        {/* P2P 连接中 - 动画虚线 */}
+        {stepStatuses[1].inProgress && (
+          <div className="absolute left-0 w-1/2 border-t-2 border-dashed border-[#1f6feb] animate-pulse" />
+        )}
+      </div>
+
+      {/* 通道层 - 实线（在 P2P 层之上） */}
+      <div className="absolute top-8 left-20 right-20 h-[6px]">
+        {/* 通道建立成功 - 绿色实线 */}
+        {channelEstablished && (
+          <div className="h-full bg-[#238636] rounded-full transition-all duration-500 shadow-[0_0_8px_rgba(35,134,54,0.5)]" />
+        )}
+
+        {/* 通道建立中 - 动画实线 */}
+        {stepStatuses[2].inProgress && (
+          <div className="h-full w-1/2 bg-[#1f6feb] rounded-full animate-pulse" />
+        )}
+      </div>
+
+      {/* Alice */}
+      <div className="flex flex-col items-center relative z-10">
+        <div className={`w-20 h-20 rounded-xl flex items-center justify-center border-2 transition-all ${
+          nodesOnline.alice
+            ? 'bg-[#161b22] border-[#30363d] shadow-lg'
+            : 'bg-[#0d1117] border-[#21262d]'
+        } ${currentStep === 1 && stepStatuses[1].inProgress ? 'ring-2 ring-[#1f6feb] ring-opacity-50' : ''}`}>
+          <span className="text-2xl font-bold text-white">A</span>
+        </div>
+        <div className="mt-2.5 text-center">
+          <span className="text-sm font-medium text-white">Alice</span>
+          <p className="text-[10px] text-[#6e7681]">{t('quickstart.alice')}</p>
+        </div>
+      </div>
+
+      {/* Bob */}
+      <div className="flex flex-col items-center relative z-10">
+        <div className={`w-20 h-20 rounded-xl flex items-center justify-center border-2 transition-all ${
+          nodesOnline.bob
+            ? 'bg-[#161b22] border-[#30363d] shadow-lg'
+            : 'bg-[#0d1117] border-[#21262d]'
+        } ${currentStep === 1 && stepStatuses[1].inProgress ? 'ring-2 ring-[#1f6feb] ring-opacity-50' : ''}`}>
+          <span className="text-2xl font-bold text-white">B</span>
+        </div>
+        <div className="mt-2.5 text-center">
+          <span className="text-sm font-medium text-white">Bob</span>
+          <p className="text-[10px] text-[#6e7681]">{t('quickstart.bob')}</p>
+        </div>
+      </div>
+
+      {stepStatuses[2].completed && (
+        <div className="absolute -bottom-10 left-1/2 -translate-x-1/2 flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-[#238636]/10 border border-[#238636]/30">
+          <CheckCircle className="w-3.5 h-3.5 text-[#3fb950]" />
+          <span className="text-xs text-[#3fb950] font-medium">{t('quickstart.channelEstablished')}</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function StatusHint({
+  nodesOnline,
+  stepStatuses,
+  channelReady,
+  allCompleted,
+  currentStep,
+  canExecute,
+}: {
+  nodesOnline: { alice: boolean; bob: boolean };
+  stepStatuses: Record<number, StepStatus>;
+  channelReady: boolean;
+  allCompleted: boolean;
+  currentStep: QuickStartStep;
+  canExecute: boolean;
+}) {
+  const { t } = useI18n();
+
+  if (!nodesOnline.alice || !nodesOnline.bob) {
+    return (
+      <div className="flex items-center gap-2 text-xs text-[#d29922] bg-[#d29922]/10 rounded-lg px-3 py-2 border border-[#d29922]/20">
+        <Terminal className="w-3.5 h-3.5" />
+        {t('quickstart.dockerHint')}
+      </div>
+    );
+  }
+
+  if (stepStatuses[2].waiting) {
+    return (
+      <div className="flex items-center gap-2 text-xs text-[#d29922] bg-[#d29922]/10 rounded-lg px-3 py-2 border border-[#d29922]/20">
+        <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+        {t('quickstart.channelWaitingHint')}
+      </div>
+    );
+  }
+
+  if (allCompleted) {
+    return (
+      <div className="flex items-center gap-2 text-xs text-[#3fb950] bg-[#238636]/10 rounded-lg px-3 py-2 border border-[#238636]/20">
+        <CheckCircle className="w-3.5 h-3.5" />
+        {t('quickstart.allCompleted')}
+      </div>
+    );
+  }
+
+  if (currentStep === 3 && !channelReady) {
+    return (
+      <div className="text-xs text-[#6e7681] bg-[#161b22] rounded-lg px-3 py-2 border border-[#21262d]">
+        {t('quickstart.waitForChannel')}
+      </div>
+    );
+  }
+
+  if (!canExecute) {
+    return (
+      <div className="text-xs text-[#6e7681] bg-[#161b22] rounded-lg px-3 py-2 border border-[#21262d]">
+        {t('quickstart.completePrevSteps')}
+      </div>
+    );
+  }
+
+  return null;
+}
+
+function RpcTracePanel({
+  traces,
+  expandedRpc,
+  currentStep,
+  setExpandedRpc,
+}: {
+  traces: RpcTrace[];
+  expandedRpc: string | null;
+  currentStep: QuickStartStep;
+  setExpandedRpc: (id: string | null) => void;
+}) {
+  const { t } = useI18n();
+
+  return (
+    <div className="mt-4">
+      <div className="flex items-center gap-1.5 text-[10px] text-[#6e7681] mb-2 uppercase tracking-wider font-medium">
+        <Zap className="w-3 h-3" /> {t('quickstart.rpcCall')}
+      </div>
+      <div className="space-y-2">
+        {traces.map((trace, idx) => (
+          <div key={idx} className="bg-[#0d1117] rounded-lg border border-[#21262d] overflow-hidden">
+            <button
+              className="w-full flex items-center gap-2 px-3 py-2.5 hover:bg-[#161b22] transition-colors"
+              onClick={() => setExpandedRpc(expandedRpc === `${currentStep}-${idx}` ? null : `${currentStep}-${idx}`)}
+            >
+              {expandedRpc === `${currentStep}-${idx}` ? (
+                <ChevronDown className="w-3.5 h-3.5 text-[#6e7681]" />
+              ) : (
+                <ChevronRight className="w-3.5 h-3.5 text-[#6e7681]" />
+              )}
+              <span className="text-[#58a6ff] font-mono text-xs">{trace.method}</span>
+              {trace.error ? (
+                <span className="ml-auto text-[10px] text-[#f85149] bg-[#f85149]/10 px-1.5 py-0.5 rounded">{t('output.error')}</span>
+              ) : (
+                <span className="ml-auto text-[10px] text-[#3fb950] bg-[#238636]/10 px-1.5 py-0.5 rounded">{trace.durationMs}ms</span>
+              )}
+            </button>
+            {expandedRpc === `${currentStep}-${idx}` && (
+              <div className="px-3 pb-3 space-y-2">
+                <div>
+                  <div className="text-[10px] text-[#d29922] mb-1 font-medium">{t('output.request')}</div>
+                  <pre className="text-[11px] text-[#e6edf3] bg-[#161b22] rounded-md p-2.5 overflow-x-auto border border-[#21262d]">
+                    {JSON.stringify(trace.params, null, 2)}
+                  </pre>
+                </div>
+                <div>
+                  <div className={`text-[10px] mb-1 font-medium ${trace.error ? 'text-[#f85149]' : 'text-[#3fb950]'}`}>
+                    {trace.error ? t('output.error') : t('output.response')}
+                  </div>
+                  <pre className={`text-[11px] rounded-md p-2.5 overflow-x-auto border ${
+                    trace.error
+                      ? 'text-[#f85149] bg-[#f85149]/5 border-[#f85149]/20'
+                      : 'text-[#e6edf3] bg-[#161b22] border-[#21262d]'
+                  }`}>
+                    {trace.error || JSON.stringify(trace.result, null, 2)}
+                  </pre>
+                </div>
+              </div>
+            )}
+          </div>
+        ))}
       </div>
     </div>
   );

@@ -1,24 +1,50 @@
 # Fiber Demo Startup
 
-This repository provides a complete local development/testing environment for [Fiber Network](https://github.com/nervosnetwork/fiber), using Docker Compose to launch a CKB development chain and multiple Fiber nodes with a single command.
+This repository provides a complete local development and demonstration environment for [Fiber Network](https://github.com/nervosnetwork/fiber), including:
+
+1. **Docker Infrastructure** - CKB development chain + multiple Fiber nodes (bootnode + 3 regular nodes)
+2. **Interactive Demo App** - A Next.js-based web application for learning and demonstrating Fiber Network features
 
 ## Purpose
 
-This is a Fiber Network demo environment designed for:
+This project is designed for:
 
-- Local testing of Fiber Network payment channel functionality
-- Developing and debugging Fiber-based applications
-- Learning and understanding how Fiber Network works
-- Testing Lightning Network-style payments with CKB native tokens and sUDT tokens
+- **Learning** - Interactive tutorials to understand Fiber Network concepts
+- **Demonstration** - Visual interface to explore payment channels and transactions
+- **Development** - Local testing environment for Fiber-based applications
+- **Experimentation** - Test Lightning Network-style payments with CKB native tokens and sUDT tokens
+
+## Project Structure
+
+```
+.
+├── docker-compose.yml      # Docker infrastructure (CKB + Fiber nodes)
+├── app/                    # Next.js demo application
+│   ├── src/
+│   │   ├── app/            # App Router pages
+│   │   │   ├── page.tsx    # Home (choose Quick Start or Demo)
+│   │   │   ├── quickstart/ # Interactive tutorial
+│   │   │   ├── demo/       # Full demo interface
+│   │   │   └── docs/       # SDK documentation
+│   │   ├── components/     # React components
+│   │   └── lib/            # Utilities and Fiber client
+│   └── package.json
+├── ckb/                    # CKB node configuration
+├── fiber/                  # Fiber node configurations
+└── fiber-web/              # Legacy web monitoring panel
+```
 
 ## Quick Start
 
 ### Prerequisites
 
-- Docker
-- Docker Compose
+- Docker & Docker Compose
+- Node.js 18+ (for the demo app)
+- pnpm/npm/yarn
 
-### Launch Services
+### 1. Start the Infrastructure (Docker)
+
+Launch the CKB development chain and Fiber nodes:
 
 ```bash
 docker compose up --build
@@ -26,9 +52,33 @@ docker compose up --build
 
 The first build requires compiling CKB and Fiber from source, which may take a considerable amount of time.
 
+### 2. Start the Demo App
+
+In a separate terminal:
+
+```bash
+cd app
+pnpm install
+pnpm dev
+```
+
+Open http://localhost:3002 to access the demo application.
+
+### Service Ports
+
+| Service | Port | Description |
+|---------|------|-------------|
+| Demo App | 3002 | Interactive demo and tutorial |
+| CKB RPC | 8114 | CKB development chain |
+| fiber-bootnode | 10000 | Bootstrap node RPC |
+| fiber-node1 | 10001 | Node 1 RPC |
+| fiber-node2 | 10002 | Node 2 RPC |
+| fiber-node3 | 10003 | Node 3 RPC |
+| fiber-web | 3000 | Legacy monitoring panel |
+
 ### Clean Up Environment
 
-To reset the Fiber nodes' state (e.g., channels, payment history), stop the services and delete the store directories:
+To reset the Fiber nodes' state (e.g., channels, payment history):
 
 ```bash
 docker compose down
@@ -36,17 +86,6 @@ rm -rf fiber/nodes/*/store
 ```
 
 Then restart with `docker compose up` to start fresh.
-
-### Service Ports
-
-| Service | RPC Port | P2P Port |
-|---------|----------|----------|
-| CKB | 8114 | - |
-| fiber-bootnode | 10000 | 8230 |
-| fiber-node1 | 10001 | 8231 |
-| fiber-node2 | 10002 | 8232 |
-| fiber-node3 | 10003 | 8233 |
-| fiber-web | 3000 | - |
 
 ### Calling Fiber RPC
 
@@ -99,24 +138,80 @@ This project contains 7 Docker images:
 - Transfers 1 billion sUDT to node1, node2, and node3
 - After distribution, each Fiber node has sufficient funds to open payment channels and perform test transactions
 
-### 5. fiber-web
+### 5. fiber-web (Legacy)
 
-**Purpose**: Web-based monitoring and management panel ([fiber-nodes-monit](https://github.com/gpBlockchain/fiber-nodes-monit))
+**Purpose**: Legacy web-based monitoring panel ([fiber-nodes-monit](https://github.com/gpBlockchain/fiber-nodes-monit))
 
-- Provides a web UI for monitoring and operating Fiber nodes
-- Built with React + TypeScript + Vite, served by a Node.js backend
-- Includes a JSON-RPC proxy that forwards browser requests to Fiber node RPC endpoints
+- Provides a basic web UI for monitoring Fiber nodes
 - Accessible at http://127.0.0.1:3000 after startup
-- To add nodes for monitoring, use the Docker internal service names as RPC URLs:
-  - `http://fiber-bootnode:10000`
-  - `http://fiber-node1:10000`
-  - `http://fiber-node2:10000`
-  - `http://fiber-node3:10000`
+- **Note**: The new interactive demo app (`app/`) on port 3002 is now the recommended interface
+
+## Demo Application Features
+
+The demo app (`app/`) provides an interactive learning and demonstration environment:
+
+### Quick Start (`/quickstart`)
+
+Step-by-step interactive tutorial covering:
+- Connecting to Fiber nodes
+- Opening payment channels
+- Making payments (CKB and sUDT)
+- Closing channels
+
+Each step includes code examples with syntax highlighting and copy-to-clipboard functionality.
+
+### Full Demo (`/demo`)
+
+Visual interface for exploring Fiber Network:
+- **Node Cards** - View status of all 4 Fiber nodes (bootnode + 3 regular nodes)
+- **Channel Management** - Open, monitor, and close payment channels
+- **Payment Interface** - Send CKB and sUDT payments through channels
+- **RPC Inspector** - Browse and test Fiber JSON-RPC methods
+- **Real-time Logs** - View node activity and debug information
+
+### SDK Documentation (`/docs`)
+
+Comprehensive documentation for the Fiber SDK including:
+- API reference
+- Type definitions
+- Usage examples
 
 ## Directory Structure
 
+### Demo Application (`app/`)
+
+The interactive demo app built with Next.js + TypeScript + Tailwind CSS:
+
 ```
-.
+app/
+├── src/
+│   ├── app/                # Next.js App Router
+│   │   ├── page.tsx        # Home page - choose Quick Start or Demo
+│   │   ├── quickstart/     # Step-by-step interactive tutorial
+│   │   ├── demo/           # Full demo with visual interface
+│   │   ├── docs/           # SDK documentation
+│   │   └── api/            # API routes for Fiber RPC proxy
+│   ├── components/         # React components
+│   │   ├── demo/           # Demo page components (NodeCard, RpcInspector, etc.)
+│   │   ├── quickstart/     # Quick start components
+│   │   ├── DemoMode.tsx    # Main demo interface
+│   │   └── LanguageSwitcher.tsx
+│   ├── hooks/              # Custom React hooks
+│   │   ├── useChannels.ts  # Channel management
+│   │   ├── useNodeStatus.ts# Node status monitoring
+│   │   └── useLogs.ts      # Log streaming
+│   ├── lib/                # Utilities
+│   │   ├── fiber/          # Fiber client and types
+│   │   ├── i18n/           # Internationalization
+│   │   └── fiber-client.ts # Fiber RPC client
+│   └── types/              # TypeScript type definitions
+├── package.json
+└── next.config.ts
+```
+
+### Docker Infrastructure
+
+```
 ├── docker-compose.yml      # Docker Compose configuration
 ├── ckb/                    # CKB node configuration
 │   ├── Dockerfile          # CKB image build file
@@ -124,41 +219,68 @@ This project contains 7 Docker images:
 │   ├── contracts/          # Pre-deployed smart contracts
 │   └── run.sh              # CKB startup script
 ├── fiber/                  # Fiber node configuration
-│   ├── Dockerfile          # Fiber image build file (generic, shared by all nodes)
+│   ├── Dockerfile          # Fiber image build file
 │   ├── Dockerfile.transfer # Transfer tool image build file
 │   ├── contracts/          # Fiber contracts
 │   ├── start.sh            # Fiber node startup script
 │   ├── transfer/           # Fund distribution tool source code
 │   └── nodes/              # Per-node configuration directories
-│       ├── bootnode/       # Bootnode configuration
-│       │   ├── ckb/
-│       │   │   └── key     # CKB account private key
-│       │   ├── config.yml  # Node configuration
-│       │   ├── dev.toml    # Chain spec
-│       │   ├── fiber/
-│       │   │   └── sk      # Fiber node secret key
-│       │   └── store/      # Runtime data (created automatically, delete to reset)
-│       ├── node1/          # Node1 configuration (same structure)
-│       ├── node2/          # Node2 configuration (same structure)
-│       └── node3/          # Node3 configuration (same structure)
-├── fiber-web/              # Web monitoring panel
-│   └── Dockerfile          # fiber-nodes-monit image build file
+│       ├── bootnode/       # Bootstrap node
+│       ├── node1/          # Regular node 1
+│       ├── node2/          # Regular node 2
+│       └── node3/          # Regular node 3
+└── fiber-web/              # Legacy web monitoring panel
 ```
-
-Each node directory follows a standardized layout and is mounted into the container at runtime via Docker volumes. The `store/` directory is created automatically when the node runs and contains the node's state data.
 
 ## Startup Order
 
-Docker Compose starts services in the following order:
+### Infrastructure (Docker Compose)
 
 1. **ckb** - Starts the CKB development chain first
 2. **transfer** - Runs fund distribution after CKB is ready
 3. **fiber-bootnode** - Starts the bootstrap node after CKB is ready
 4. **fiber-node1/2/3** - Start regular nodes after bootnode is ready
-5. **fiber-web** - Starts the web monitoring panel after bootnode is ready
+5. **fiber-web** - Starts the legacy web monitoring panel
+
+### Demo Application
+
+The demo app should be started after the Docker infrastructure is ready:
+
+```bash
+# 1. Start infrastructure
+docker compose up
+
+# 2. In another terminal, start the demo app
+cd app
+pnpm install  # First time only
+pnpm dev
+```
+
+## Development Workflow
+
+### Making Changes to the Demo App
+
+The demo app supports hot reloading during development:
+
+```bash
+cd app
+pnpm dev
+```
+
+Changes to React components, styles, or API routes will be reflected immediately.
+
+### Rebuilding Docker Images
+
+If you modify the Docker configuration or need to rebuild:
+
+```bash
+docker compose down
+docker compose up --build
+```
 
 ## Notes
 
 - All data is ephemeral and will be lost when containers restart; suitable for development and testing
 - Private keys are for testing purposes only; do not use in production
-- First-time image build takes a long time; please be patient
+- First-time Docker image build takes a long time; please be patient
+- The demo app requires the Docker infrastructure to be running (CKB + Fiber nodes)
