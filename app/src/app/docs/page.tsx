@@ -53,12 +53,12 @@ const METHODS: MethodDoc[] = [
       },
     ],
     returns: [
-      { field: "node_id", type: "hex string", desc: { zh: "节点公钥（65 字节，压缩格式），用于节点身份识别，与 Peer ID 不同", en: "Node public key (65 bytes, compressed format), for node identity, different from Peer ID" } },
+      { field: "pubkey", type: "hex string", desc: { zh: "节点公钥（hex-encoded secp256k1），用于节点身份识别", en: "Node public key (hex-encoded secp256k1), for node identity" } },
       { field: "version", type: "string", desc: { zh: 'Fiber 节点版本号，如 "0.1.0"', en: 'Fiber node version, e.g. "0.1.0"' } },
       {
         field: "addresses",
         type: "string[]",
-        desc: { zh: "P2P 监听地址列表，格式 /dns4/<host>/tcp/<port>/p2p/<peerId>，peerId 用于 connectPeer 和 openChannel", en: "P2P listening address list, format /dns4/<host>/tcp/<port>/p2p/<peerId>, peerId used for connectPeer and openChannel" },
+        desc: { zh: "P2P 监听地址列表", en: "P2P listening address list" },
       },
       { field: "chain_hash", type: "hex string", desc: { zh: "所在链的 genesis block hash，用于区分 mainnet / testnet / devnet", en: "Genesis block hash of the chain, used to distinguish mainnet / testnet / devnet" } },
       {
@@ -76,7 +76,7 @@ const METHODS: MethodDoc[] = [
 }`,
       response: `{
   "result": {
-    "node_id": "0x02e...",
+    "pubkey": "0x02e...",
     "version": "0.1.0",
     "addresses": [
       "/dns4/fiber-node1/tcp/8227/p2p/QmXa..."
@@ -94,13 +94,13 @@ const METHODS: MethodDoc[] = [
 
 const info = await getNodeInfo("alice");
 
-// 提取 Peer ID（用于 connectPeer / openChannel）
-const peerId = info.addresses[0].match(/\\/p2p\\/(.+)$/)?.[1];
+// 获取节点公钥（用于 connectPeer / openChannel）
+const pubkey = info.pubkey;
 
 // 查看链上地址（用于 CKB 预充资金）
 const lockScript = info.default_funding_lock_script;`,
     notes: [
-      "addresses 中的 peerId 是 multihash 格式（以 Qm 开头），不同于 node_id（压缩公钥）",
+      "pubkey 是 hex-encoded secp256k1 公钥，用于标识节点身份",
       "同一个 Fiber 节点可以有多个 P2P 地址，通常取第一个即可",
     ],
   },
@@ -115,10 +115,16 @@ const lockScript = info.default_funding_lock_script;`,
     params: [
       { field: "nodeName", type: "string", required: true, desc: { zh: "发起连接的节点名", en: "Node name initiating the connection" } },
       {
+        field: "pubkey",
+        type: "string",
+        required: false,
+        desc: { zh: "对端节点公钥，与 address 至少提供一个", en: "Peer node public key, at least one of pubkey or address must be provided" },
+      },
+      {
         field: "address",
         type: "string",
-        required: true,
-        desc: { zh: "对端节点的完整多地址字符串，从目标节点的 node_info.addresses 获取。格式：/dns4/<host>/tcp/<port>/p2p/<peerId>", en: "Full multiaddr string of peer node, obtained from target node node_info.addresses. Format: /dns4/<host>/tcp/<port>/p2p/<peerId>" },
+        required: false,
+        desc: { zh: "对端节点的 P2P 地址字符串", en: "Peer node P2P address string" },
       },
     ],
     returns: [{ field: "(null)", type: "null", desc: { zh: "成功时静默返回 null，无实际返回值", en: "Returns null silently on success, no actual return value" } }],
@@ -135,13 +141,13 @@ const lockScript = info.default_funding_lock_script;`,
   "result": null
 }`,
     },
-    sdkExample: `import { connectPeer, getNodeP2PAddress } from "@/lib/fiber-client";
+    sdkExample: `import { connectPeer, getNodeInfo } from "@/lib/fiber-client";
 
-// 先获取目标节点的 P2P地址
-const address = await getNodeP2PAddress("bob");
+// 获取目标节点的公钥
+const info = await getNodeInfo("bob");
 
 // 发起连接（已连接时调用幂等）
-await connectPeer("alice", { address });
+await connectPeer("alice", { pubkey: info.pubkey });
 
 // 建议等待 1-2 秒再调用 openChannel，确保握手完成
 await new Promise(r => setTimeout(r, 2000));`,
@@ -157,15 +163,15 @@ await new Promise(r => setTimeout(r, 2000));`,
     rpcMethod: "open_channel",
     category: "channel",
     tagline: { zh: "开启链下支付通道", en: "Open off-chain payment channel" },
-    description: { zh: "在两个节点之间开启一条支付通道。调用后 Fiber 会自动构建链上 funding 交易并广播，等待 CKB 出块确认（约 10-20 秒）后通道变为 CHANNEL_READY 状态，此后双方可以进行链下支付。支持 CKB 和任意 UDT 资产。", en: "Open a payment channel between two nodes. Fiber automatically builds and broadcasts on-chain funding transaction. Channel becomes CHANNEL_READY after CKB block confirmation (~10-20s), then both parties can make off-chain payments. Supports CKB and any UDT assets." },
+    description: { zh: "在两个节点之间开启一条支付通道。调用后 Fiber 会自动构建链上 funding 交易并广播，等待 CKB 出块确认（约 10-20 秒）后通道变为 ChannelReady 状态，此后双方可以进行链下支付。支持 CKB 和任意 UDT 资产。", en: "Open a payment channel between two nodes. Fiber automatically builds and broadcasts on-chain funding transaction. Channel becomes ChannelReady after CKB block confirmation (~10-20s), then both parties can make off-chain payments. Supports CKB and any UDT assets." },
     signature: "openChannel(nodeName: string, params: OpenChannelParams): Promise<{ channel_id: string }>",
     params: [
       { field: "nodeName", type: "string", required: true, desc: { zh: "开通通道的发起方节点名", en: "Node name initiating the channel opening" } },
       {
-        field: "peerId",
+        field: "pubkey",
         type: "string",
         required: true,
-        desc: { zh: "对端节点 Peer ID，从 node_info.addresses 的 /p2p/<id> 部分提取", en: "Peer ID of counterparty node, extracted from /p2p/<id> part of node_info.addresses" },
+        desc: { zh: "对端节点公钥，从 node_info.pubkey 获取", en: "Peer node public key, obtained from node_info.pubkey" },
       },
       {
         field: "fundingAmount",
@@ -187,7 +193,7 @@ await new Promise(r => setTimeout(r, 2000));`,
   "jsonrpc": "2.0",
   "method": "open_channel",
   "params": [{
-    "peer_id": "QmXb...",
+    "pubkey": "0x02e...",
     "funding_amount": "0x2540be400",
     // UDT 通道额外附加：
     "funding_udt_type_script": {
@@ -204,11 +210,14 @@ await new Promise(r => setTimeout(r, 2000));`,
   }
 }`,
     },
-    sdkExample: `import { openChannel } from "@/lib/fiber-client";
+    sdkExample: `import { openChannel, getNodeInfo } from "@/lib/fiber-client";
+
+// 获取对端公钥
+const info = await getNodeInfo("bob");
 
 // CKB 通道：注资 100 CKB
 const result = await openChannel("alice", {
-  peerId: "QmXb...",
+  pubkey: info.pubkey,
   fundingAmount: "10000000000",  // 100 CKB in shannon
   assetType: "CKB",
 });
@@ -216,15 +225,15 @@ console.log(result.channel_id); // 0x44bf...
 
 // UDT 通道：注资 1000 UDT
 await openChannel("alice", {
-  peerId: "QmXb...",
+  pubkey: info.pubkey,
   fundingAmount: "1000",
   assetType: "UDT",
 });`,
     notes: [
       { zh: "底层 RPC 要求 funding_amount 为十六进制字符串，SDK 已自动处理转换", en: "Underlying RPC requires funding_amount as hex string, SDK handles conversion automatically" },
-      { zh: "通道开启后需等待链上确认才变为 CHANNEL_READY，期间无法发起支付", en: "Channel needs on-chain confirmation to become CHANNEL_READY, cannot initiate payments during this period" },
+      { zh: "通道开启后需等待链上确认才变为 ChannelReady，期间无法发起支付", en: "Channel needs on-chain confirmation to become ChannelReady, cannot initiate payments during this period" },
       { zh: "UDT 通道的 type script 已内置在 SDK 中，无需手动传入", en: "UDT channel type script is built into SDK, no need to pass manually" },
-      { zh: "通道 ID 在 NEGOTIATING_FUNDING 阶段为临时 ID，确认后可能变更，建议通过 listChannels 重新获取", en: "Channel ID is temporary during NEGOTIATING_FUNDING stage, may change after confirmation, recommend retrieving via listChannels" },
+      { zh: "通道 ID 在 AwaitingTxSignatures 阶段为临时 ID，确认后可能变更，建议通过 listChannels 重新获取", en: "Channel ID is temporary during AwaitingTxSignatures stage, may change after confirmation, recommend retrieving via listChannels" },
     ],
   },
   {
@@ -241,13 +250,13 @@ await openChannel("alice", {
     returns: [
       { field: "channels", type: "Channel[]", desc: { zh: "通道数组", en: "Channel array" } },
       { field: "channels[].channel_id", type: "hex string", desc: { zh: "通道唯一 ID", en: "Channel unique ID" } },
-      { field: "channels[].peer_id", type: "string", desc: { zh: "对端节点 Peer ID", en: "Counterparty node Peer ID" } },
+      { field: "channels[].pubkey", type: "string", desc: { zh: "对端节点公钥", en: "Counterparty node public key" } },
       { field: "channels[].local_balance", type: "hex string", desc: { zh: "本地余额（shannon），发起支付后减少", en: "Local balance (shannon), decreases after initiating payment" } },
       { field: "channels[].remote_balance", type: "hex string", desc: { zh: "对端余额（shannon），收到支付后增加", en: "Remote balance (shannon), increases after receiving payment" } },
       {
         field: "channels[].state.state_name",
         type: "string",
-        desc: { zh: "通道状态：CHANNEL_READY（可用）/ NEGOTIATING_FUNDING（等待链上确认）/ CLOSED（已关闭）", en: "Channel state: CHANNEL_READY (available) / NEGOTIATING_FUNDING (waiting on-chain confirmation) / CLOSED (closed)" },
+        desc: { zh: "通道状态：ChannelReady（可用）/ AwaitingTxSignatures（等待链上确认）/ ChannelClosed（已关闭）", en: "Channel state: ChannelReady (available) / AwaitingTxSignatures (waiting on-chain confirmation) / ChannelClosed (closed)" },
       },
     ],
     rpcRaw: {
@@ -262,10 +271,10 @@ await openChannel("alice", {
   "result": {
     "channels": [{
       "channel_id": "0x44bf...",
-      "peer_id": "QmXb...",
+      "pubkey": "0x02e...",
       "local_balance": "0x3b9aca00",
       "remote_balance": "0x77359400",
-      "state": { "state_name": "CHANNEL_READY" }
+      "state": { "state_name": "ChannelReady" }
     }]
   }
 }`,
@@ -276,7 +285,7 @@ const { channels } = await getChannels("alice");
 
 for (const ch of channels) {
   const localCKB = Number(BigInt(ch.local_balance)) / 1e8;
-  const isReady = ch.state.state_name === "CHANNEL_READY";
+  const isReady = ch.state.state_name === "ChannelReady";
   console.log(\`Channel \${ch.channel_id.slice(0,10)}... Local: \${localCKB} CKB Status: \${isReady ? "Ready" : "Waiting"}\`);
 }`,
     notes: [
@@ -458,7 +467,7 @@ if (result.status === "Success") {
 // Get channel list first
 const { channels } = await getChannels("alice");
 const readyChannels = channels.filter(
-  ch => ch.state.state_name === "CHANNEL_READY"
+  ch => ch.state.state_name === "ChannelReady"
 );
 
 // Close first ready channel
@@ -467,7 +476,7 @@ if (readyChannels.length > 0) {
   console.log("Channel closing, funds will settle on-chain...");
 }`,
     notes: [
-      { zh: "只有 CHANNEL_READY 状态的通道才能关闭", en: "Only CHANNEL_READY state channels can be closed" },
+      { zh: "只有 ChannelReady 状态的通道才能关闭", en: "Only ChannelReady state channels can be closed" },
       { zh: "底层 RPC 需要 close_script 和 fee_rate，SDK 已内置默认值，无需手动传入", en: "Underlying RPC requires close_script and fee_rate, SDK has built-in defaults, no need to pass manually" },
       { zh: "结算后双方链上余额会增加，可通过 CKB RPC get_cells_capacity 查询", en: "After settlement, both parties on-chain balances increase, can query via CKB RPC get_cells_capacity" },
     ],
@@ -576,7 +585,7 @@ const res = await fetch("http://127.0.0.1:10001", {
     jsonrpc: "2.0",
     method: "open_channel",
     params: [{
-      peer_id: peerId,
+    pubkey: pubkey,
       // ⚠️ 必须十六进制，不能直接传数字
       funding_amount: "0x" +
         BigInt(amount).toString(16),
@@ -604,7 +613,7 @@ return data.result;`}</pre>
 
 // 直接传人类可读的参数
 const result = await openChannel("alice", {
-  peerId: "QmXb...",
+  pubkey: "QmXb...",
   // ✅ 传普通数字，SDK 自动转十六进制
   fundingAmount: "10000000000",
   // ✅ 传枚举，SDK 自动附加 type script

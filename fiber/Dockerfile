@@ -7,8 +7,8 @@ RUN apt-get update && \
 
 RUN curl https://sh.rustup.rs -sSf | sh -s -- -y
 
-RUN cd /root && git clone --recursive https://github.com/Officeyutong/fiber && \
-    cd fiber && git checkout fiber-demo-support
+RUN cd /root && git clone --recursive https://github.com/nervosnetwork/fiber && \
+    cd fiber && git checkout v0.8.0
 
 RUN cd /root/fiber && CARGO_BUILD_JOBS=2 /root/.cargo/bin/cargo build --release
 

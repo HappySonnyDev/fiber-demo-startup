@@ -44,7 +44,7 @@ interface SidePanelProps {
   onDeselectNode: () => void;
   
   // 工具函数
-  findNodeNameByPeerId: (peerId: string) => string;
+  findNodeNameByPubkey: (pubkey: string) => string;
 }
 
 export function SidePanel({
@@ -75,7 +75,7 @@ export function SidePanel({
   onCreateInvoice,
   onPayInvoice,
   onDeselectNode,
-  findNodeNameByPeerId,
+  findNodeNameByPubkey,
 }: SidePanelProps) {
   const { t } = useI18n();
 
@@ -121,11 +121,11 @@ export function SidePanel({
               onCreateInvoice={onCreateInvoice}
               onPayInvoice={onPayInvoice}
               onDeselectNode={onDeselectNode}
-              findNodeNameByPeerId={findNodeNameByPeerId}
+              findNodeNameByPubkey={findNodeNameByPubkey}
             />
 
             {/* 通道状态 */}
-            <ChannelStatusSection channels={channels} nodeIdMap={nodeIdMap} pendingChannels={pendingChannels} findNodeNameByPeerId={findNodeNameByPeerId} />
+            <ChannelStatusSection channels={channels} nodeIdMap={nodeIdMap} pendingChannels={pendingChannels} findNodeNameByPubkey={findNodeNameByPubkey} />
           </div>
         )}
       </div>
@@ -162,7 +162,7 @@ function SidePanelContent({
   onCreateInvoice,
   onPayInvoice,
   onDeselectNode,
-  findNodeNameByPeerId,
+  findNodeNameByPubkey,
 }: {
   selectedNode: string | null;
   selectedChannels: ChannelInfo[];
@@ -190,7 +190,7 @@ function SidePanelContent({
   onCreateInvoice: () => void;
   onPayInvoice: () => void;
   onDeselectNode: () => void;
-  findNodeNameByPeerId: (peerId: string) => string;
+  findNodeNameByPubkey: (pubkey: string) => string;
 }) {
   const { t } = useI18n();
 
@@ -242,7 +242,7 @@ function SidePanelContent({
           selectedNode={selectedNode}
           channels={selectedChannels}
           onCloseChannel={onCloseChannel}
-          findNodeNameByPeerId={findNodeNameByPeerId}
+          findNodeNameByPubkey={findNodeNameByPubkey}
         />
       )}
 
@@ -340,11 +340,11 @@ function OpenChannelSection({
         />
       </div>
       <button
-        onClick={() => openChannelTarget && !isOpeningChannel && !pendingChannels.has(`${selectedNode}-${openChannelTarget}`) && onOpenChannel(selectedNode, openChannelTarget, openChannelAmount, openChannelAssetType)}
-        disabled={!openChannelTarget || isOpeningChannel || pendingChannels.has(`${selectedNode}-${openChannelTarget}`)}
+        onClick={() => openChannelTarget && !isOpeningChannel && !pendingChannels.has(`${selectedNode.toLowerCase()}-${openChannelTarget.toLowerCase()}`) && onOpenChannel(selectedNode, openChannelTarget, openChannelAmount, openChannelAssetType)}
+        disabled={!openChannelTarget || isOpeningChannel || pendingChannels.has(`${selectedNode.toLowerCase()}-${openChannelTarget.toLowerCase()}`)}
         className="w-full py-1.5 bg-blue-600 hover:bg-blue-700 disabled:opacity-40 text-white text-xs rounded transition-colors flex items-center justify-center gap-1.5"
       >
-        {pendingChannels.has(`${selectedNode}-${openChannelTarget}`) ? (
+        {pendingChannels.has(`${selectedNode.toLowerCase()}-${openChannelTarget.toLowerCase()}`) ? (
           <><RefreshCw className="w-3 h-3 animate-spin" /> {t('channel.open.confirming')}</>
         ) : isOpeningChannel ? (
           <><RefreshCw className="w-3 h-3 animate-spin" /> {t('channel.open.opening')}</>
@@ -360,12 +360,12 @@ function CloseChannelSection({
   selectedNode,
   channels,
   onCloseChannel,
-  findNodeNameByPeerId,
+  findNodeNameByPubkey,
 }: {
   selectedNode: string;
   channels: ChannelInfo[];
   onCloseChannel: (nodeName: string, channelId: string) => void;
-  findNodeNameByPeerId: (peerId: string) => string;
+  findNodeNameByPubkey: (pubkey: string) => string;
 }) {
   const { t } = useI18n();
 
@@ -376,7 +376,7 @@ function CloseChannelSection({
       </label>
       <div className="space-y-2">
         {channels.map((ch, i) => {
-          const peerName = ch.peer_id ? findNodeNameByPeerId(ch.peer_id) : '?';
+          const peerName = ch.pubkey ? findNodeNameByPubkey(ch.pubkey) : '?';
           const isUdtChannel = !!ch.funding_udt_type_script;
           const assetSymbol = isUdtChannel ? t('channel.asset.udt') : t('channel.asset.ckb');
           const divisor = isUdtChannel ? 1 : 1e8;
@@ -384,7 +384,7 @@ function CloseChannelSection({
           const remoteBal = Math.floor(Number(ch.remote_balance || 0) / divisor);
           const totalBal = localBal + remoteBal;
           const stateName = ch.state?.state_name || 'Unknown';
-          const isReady = stateName === 'CHANNEL_READY';
+          const isReady = stateName === 'ChannelReady';
           // 使用 channel_id + 索引确保 key 唯一，避免同一 peer 的多条通道冲突
           const uniqueKey = ch.channel_id ? `${ch.channel_id}-${i}` : `channel-${i}`;
           
@@ -538,12 +538,12 @@ function ChannelStatusSection({
   channels,
   nodeIdMap,
   pendingChannels,
-  findNodeNameByPeerId,
+  findNodeNameByPubkey,
 }: {
   channels: Record<string, ChannelInfo[]>;
   nodeIdMap: Record<string, string>;
   pendingChannels: Set<string>;
-  findNodeNameByPeerId: (peerId: string) => string;
+  findNodeNameByPubkey: (pubkey: string) => string;
 }) {
   const { t } = useI18n();
 
@@ -566,10 +566,10 @@ function ChannelStatusSection({
             {chs.length > 0 && (
               <div className="space-y-1 pl-2 border-l border-[#3e3e42] ml-1">
                 {chs.map((ch, idx) => {
-                  const peerName = ch.peer_id ? findNodeNameByPeerId(ch.peer_id) : '未知';
+                  const peerName = ch.pubkey ? findNodeNameByPubkey(ch.pubkey) : '未知';
                   const isUdt = !!ch.funding_udt_type_script;
                   const stateName = ch.state?.state_name || 'Unknown';
-                  const isReady = stateName === 'CHANNEL_READY';
+                  const isReady = stateName === 'ChannelReady';
                   const channelKey = `${name.toLowerCase()}-${peerName.toLowerCase()}`;
                   const isPending = pendingChannels.has(channelKey);
                   

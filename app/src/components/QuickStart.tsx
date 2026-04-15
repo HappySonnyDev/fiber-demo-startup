@@ -49,7 +49,7 @@ export default function QuickStart() {
           const readyChannel = aliceChannels.find((ch: Record<string, unknown>) => {
             const state = ch.state as Record<string, unknown> | undefined;
             const stateName = state?.state_name || (ch as Record<string, unknown>).state_name;
-            return stateName === 'CHANNEL_READY';
+            return stateName === 'ChannelReady';
           });
           return !!readyChannel;
         }

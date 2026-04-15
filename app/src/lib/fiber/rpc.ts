@@ -131,7 +131,7 @@ export async function getAllChannels() {
 // ─── open_channel ─────────────────────────────────────────────────────────────
 
 export interface OpenChannelParams {
-  peerId: string;
+  pubkey: string;
   fundingAmount: string;
   assetType?: AssetType;
 }
@@ -148,7 +148,7 @@ export async function openChannel(
     : '0x' + BigInt(params.fundingAmount).toString(16);
 
   const rpcParams: Record<string, unknown> = {
-    peer_id: params.peerId,
+    pubkey: params.pubkey,
     funding_amount: fundingHex,
   };
 
@@ -171,7 +171,7 @@ export async function openChannelWithTrace(
     : '0x' + BigInt(params.fundingAmount).toString(16);
 
   const rpcParams: Record<string, unknown> = {
-    peer_id: params.peerId,
+    pubkey: params.pubkey,
     funding_amount: fundingHex,
   };
 
@@ -310,7 +310,8 @@ export async function closeChannelWithTrace(
 // ─── connect_peer ─────────────────────────────────────────────────────────────
 
 export interface ConnectPeerParams {
-  address: string;
+  pubkey?: string;
+  address?: string;
 }
 
 export async function connectPeer(
@@ -320,7 +321,11 @@ export async function connectPeer(
   const node = NODES[nodeName];
   if (!node) throw new Error(`Unknown node: ${nodeName}`);
 
-  return rpcCall(node.rpcUrl, 'connect_peer', [{ address: params.address }]);
+  const rpcParams: Record<string, unknown> = {};
+  if (params.pubkey) rpcParams.pubkey = params.pubkey;
+  if (params.address) rpcParams.address = params.address;
+
+  return rpcCall(node.rpcUrl, 'connect_peer', [rpcParams]);
 }
 
 export async function connectPeerWithTrace(
@@ -330,7 +335,11 @@ export async function connectPeerWithTrace(
   const node = NODES[nodeName];
   if (!node) throw new Error(`Unknown node: ${nodeName}`);
 
-  return rpcCallWithTrace(node.rpcUrl, 'connect_peer', [{ address: params.address }]);
+  const rpcParams: Record<string, unknown> = {};
+  if (params.pubkey) rpcParams.pubkey = params.pubkey;
+  if (params.address) rpcParams.address = params.address;
+
+  return rpcCallWithTrace(node.rpcUrl, 'connect_peer', [rpcParams]);
 }
 
 // ─── 工具函数 ─────────────────────────────────────────────────────────────────

@@ -6,28 +6,26 @@ export const SDK_EXAMPLES = {
   step1: {
     title: 'Step 1: P2P 连接',
     subtitle: '让 Alice 连接 Bob 的 P2P 网络',
-    code: `import { connectPeer, getNodeP2PAddress } from '@/lib/fiber-client';
+    code: `import { connectPeer, getNodeInfo } from '@/lib/fiber-client';
 
-// 1. 获取 Bob 的 P2P 地址
-const bobAddress = await getNodeP2PAddress('bob');
-// 返回: "/dns4/node2/tcp/10002/p2p/QmXxx..."
+// 1. 获取 Bob 的公钥
+const info = await getNodeInfo('bob');
 
 // 2. Alice 连接 Bob
-await connectPeer('alice', { address: bobAddress });
-// RPC: connect_peer { address: "..." }`,
+await connectPeer('alice', { pubkey: info.pubkey });
+// RPC: connect_peer { pubkey: "..." }`,
   },
   step2: {
     title: 'Step 2: 建立通道',
     subtitle: 'Alice 向 Bob 开启支付通道（100 CKB）',
-    code: `import { openChannel, getNodeP2PAddress } from '@/lib/fiber-client';
+    code: `import { openChannel, getNodeInfo } from '@/lib/fiber-client';
 
-// 1. 获取 Bob 的 Peer ID
-const bobAddress = await getNodeP2PAddress('bob');
-const peerId = bobAddress.split('/p2p/')[1];
+// 1. 获取 Bob 的公钥
+const info = await getNodeInfo('bob');
 
 // 2. Alice 开启通道（100 CKB = 10^10 shannon）
 const result = await openChannel('alice', {
-  peerId,
+  pubkey: info.pubkey,
   fundingAmount: '10000000000',
   assetType: 'CKB'
 });

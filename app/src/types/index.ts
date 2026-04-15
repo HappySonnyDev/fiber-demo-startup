@@ -40,7 +40,7 @@ export interface NodeConfig {
 
 export interface ChannelInfo {
   channel_id?: string;
-  peer_id?: string;
+  pubkey?: string;
   local_balance?: string;
   remote_balance?: string;
   state?: { state_name?: string };
@@ -67,7 +67,7 @@ export interface ApiNodeInfo {
   ckbBalance: number;
   udtBalance: number;
   info: {
-    node_id?: string;
+    pubkey?: string;
     version?: string;
     commit_hash?: string;
     public_key?: string;
@@ -109,7 +109,7 @@ export type AssetType = 'CKB' | 'UDT';
 export type PaymentState = 'idle' | 'creating' | 'created' | 'paying' | 'success';
 
 export interface OpenChannelParams {
-  peerId: string;
+  pubkey: string;
   fundingAmount: string;
   assetType?: AssetType;
 }

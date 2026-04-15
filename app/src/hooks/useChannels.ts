@@ -40,11 +40,11 @@ export function useChannels() {
     
     if (bId) {
       aChannels.forEach(ch => {
-        if (ch.peer_id === bId && ch.channel_id && !seenChannelIds.has(ch.channel_id)) {
+        if (ch.pubkey === bId && ch.channel_id && !seenChannelIds.has(ch.channel_id)) {
           seenChannelIds.add(ch.channel_id);
           const isUdt = !!ch.funding_udt_type_script;
           const stateName = ch.state?.state_name;
-          const isReady = stateName === 'CHANNEL_READY';
+          const isReady = stateName === 'ChannelReady';
           results.push({ hasChannel: true, isUdt, isReady });
         }
       });
@@ -53,11 +53,11 @@ export function useChannels() {
     // 从 B 的通道中找所有与 A 的通道
     if (aId) {
       bChannels.forEach(ch => {
-        if (ch.peer_id === aId && ch.channel_id && !seenChannelIds.has(ch.channel_id)) {
+        if (ch.pubkey === aId && ch.channel_id && !seenChannelIds.has(ch.channel_id)) {
           seenChannelIds.add(ch.channel_id);
           const isUdt = !!ch.funding_udt_type_script;
           const stateName = ch.state?.state_name;
-          const isReady = stateName === 'CHANNEL_READY';
+          const isReady = stateName === 'ChannelReady';
           results.push({ hasChannel: true, isUdt, isReady });
         }
       });

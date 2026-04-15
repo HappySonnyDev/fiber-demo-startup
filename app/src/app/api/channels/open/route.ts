@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import {
   connectPeerWithTrace,
   openChannelWithTrace,
-  getNodeP2PAddress,
+  getNodeInfo,
   NODES,
   type RpcTrace,
 } from '@/lib/fiber-client';
@@ -29,18 +29,19 @@ export async function POST(request: Request) {
       );
     }
 
-    // Step 1: 获取目标节点 P2P 地址
-    const p2pAddress = await getNodeP2PAddress(toNode);
-    if (!p2pAddress) {
+    // Step 1: 获取目标节点公钥
+    const targetNodeInfo = await getNodeInfo(toNode);
+    const pubkey = (targetNodeInfo as { pubkey?: string }).pubkey;
+    if (!pubkey) {
       return NextResponse.json(
-        { error: 'Could not get P2P address from target node' },
+        { error: 'Could not get pubkey from target node' },
         { status: 500 }
       );
     }
 
     // Step 2: connect_peer（确保 P2P 已连接）
     try {
-      const { trace: connectTrace } = await connectPeerWithTrace(fromNode, { address: p2pAddress });
+      const { trace: connectTrace } = await connectPeerWithTrace(fromNode, { pubkey });
       traces.push(connectTrace);
       // 等待握手完成
       await new Promise(resolve => setTimeout(resolve, 2000));
@@ -48,13 +49,9 @@ export async function POST(request: Request) {
       // 可能已经连接，忽略错误继续
     }
 
-    // 从 P2P 地址提取 Peer ID
-    const peerIdMatch = p2pAddress.match(/p2p\/(.+)$/);
-    const peerId = peerIdMatch ? peerIdMatch[1] : p2pAddress;
-
     // Step 3: open_channel
     const { result, trace: openTrace } = await openChannelWithTrace(fromNode, {
-      peerId,
+      pubkey,
       fundingAmount: fundingAmount.toString(),
       assetType: assetType as 'CKB' | 'UDT',
     });
@@ -68,7 +65,7 @@ export async function POST(request: Request) {
       success: true,
       fromNode,
       toNode,
-      peerId,
+      pubkey,
       assetType,
       result,
       rpcTrace: traces,

@@ -34,7 +34,7 @@ export const RPC_SCHEMA: Record<string, RpcMethodSchema> = {
     description: { zh: '获取节点自身信息，包括 Peer ID、版本、P2P 地址和链上 lock script。', en: 'Get node self information, including Peer ID, version, P2P addresses and on-chain lock script.' },
     params: [],
     returns: [
-      { field: 'node_id', type: 'hex string', desc: { zh: '节点公钥（用于识别节点身份，与 Peer ID 不同）', en: 'Node public key (used to identify node identity, different from Peer ID)' } },
+      { field: 'pubkey', type: 'hex string', desc: { zh: '节点公钥（hex-encoded secp256k1，用于识别节点身份）', en: 'Node public key (hex-encoded secp256k1, used to identify node identity)' } },
       { field: 'version', type: 'string', desc: { zh: 'Fiber 节点版本号，如 "0.1.0"', en: 'Fiber node version, e.g. "0.1.0"' } },
       { field: 'addresses', type: 'string[]', desc: { zh: 'P2P 监听地址列表，格式 /dns4/<host>/tcp/<port>/p2p/<peerId>，peerId 用于 connect_peer 和 open_channel', en: 'P2P listening address list, format /dns4/<host>/tcp/<port>/p2p/<peerId>, peerId used for connect_peer and open_channel' } },
       { field: 'chain_hash', type: 'hex string', desc: { zh: '所在链的 genesis block hash，用于区分 mainnet / testnet / devnet', en: 'Genesis block hash of the chain, used to distinguish mainnet / testnet / devnet' } },
@@ -44,7 +44,7 @@ export const RPC_SCHEMA: Record<string, RpcMethodSchema> = {
 
 // 获取节点信息
 const info = await getNodeInfo('alice');
-console.log('Peer ID:', info.node_id);
+console.log('Pubkey:', info.pubkey);
 console.log('P2P Address:', info.addresses[0]);`,
   },
 
@@ -52,10 +52,16 @@ console.log('P2P Address:', info.addresses[0]);`,
     description: { zh: '建立与对端节点的 P2P 连接。open_channel 前必须先调用此接口，已连接时重复调用幂等。', en: 'Establish P2P connection with peer node. Must call this before open_channel. Idempotent when already connected.' },
     params: [
       {
+        field: 'pubkey',
+        type: 'string',
+        required: false,
+        desc: { zh: '对端节点公钥（hex-encoded secp256k1），与 address 至少提供一个', en: 'Peer node public key (hex-encoded secp256k1), at least one of pubkey or address must be provided' },
+      },
+      {
         field: 'address',
         type: 'string',
-        required: true,
-        desc: { zh: '对端节点的完整多地址字符串，格式：/dns4/<host>/tcp/<port>/p2p/<peerId> 或 /ip4/<ip>/tcp/<port>/p2p/<peerId>', en: 'Full multiaddr string of peer node, format: /dns4/<host>/tcp/<port>/p2p/<peerId> or /ip4/<ip>/tcp/<port>/p2p/<peerId>' },
+        required: false,
+        desc: { zh: '对端节点的 P2P 地址字符串，与 pubkey 至少提供一个', en: 'Peer node P2P address string, at least one of address or pubkey must be provided' },
       },
     ],
     returns: [
@@ -72,13 +78,13 @@ await connectPeer('alice', { address });`,
   },
 
   open_channel: {
-    description: { zh: '开启一条支付通道。调用后 Fiber 会自动构建并广播链上 funding 交易，等待 CKB 出块确认（约 10-20 秒）后通道变为 CHANNEL_READY 状态才可收发支付。', en: 'Open a payment channel. Fiber will automatically build and broadcast on-chain funding transaction. Channel becomes CHANNEL_READY after CKB block confirmation (~10-20s).' },
+    description: { zh: '开启一条支付通道。调用后 Fiber 会自动构建并广播链上 funding 交易，等待 CKB 出块确认（约 10-20 秒）后通道变为 ChannelReady 状态才可收发支付。', en: 'Open a payment channel. Fiber will automatically build and broadcast on-chain funding transaction. Channel becomes ChannelReady after CKB block confirmation (~10-20s).' },
     params: [
       {
-        field: 'peer_id',
+        field: 'pubkey',
         type: 'string',
         required: true,
-        desc: { zh: '对端节点 Peer ID，从目标节点 node_info.addresses 的 /p2p/<id> 部分提取', en: 'Peer ID of counterparty node, extracted from /p2p/<id> part of node_info.addresses' },
+        desc: { zh: '对端节点公钥（hex-encoded secp256k1），从目标节点 node_info.pubkey 获取', en: 'Peer node public key (hex-encoded secp256k1), obtained from node_info.pubkey' },
       },
       {
         field: 'funding_amount',
@@ -98,13 +104,13 @@ await connectPeer('alice', { address });`,
     ],
     sdkExample: `import { openChannel, getNodeP2PAddress } from '@/lib/fiber-client';
 
-// 获取对端 Peer ID
-const address = await getNodeP2PAddress('bob');
-const peerId = address.split('/p2p/')[1];
+// 获取对端公钥
+const info = await getNodeInfo('bob');
+const pubkey = info.pubkey;
 
 // 开启通道（100 CKB）
 const result = await openChannel('alice', {
-  peerId,
+  pubkey,
   fundingAmount: '10000000000', // 100 CKB = 10^10 shannon
   assetType: 'CKB'
 });
@@ -112,22 +118,22 @@ console.log('Channel ID:', result.channel_id);`,
   },
 
   list_channels: {
-    description: { zh: '获取节点的通道列表，可按 peer_id 过滤。注意：必须传 [{}] 参数，传空数组 [] 会返回 Invalid params 错误。', en: 'Get node channel list, filterable by peer_id. Note: must pass [{}] as parameter, empty array [] returns Invalid params error.' },
+    description: { zh: '获取节点的通道列表，可按 pubkey 过滤。注意：必须传 [{}] 参数，传空数组 [] 会返回 Invalid params 错误。', en: 'Get node channel list, filterable by pubkey. Note: must pass [{}] as parameter, empty array [] returns Invalid params error.' },
     params: [
       {
-        field: 'peer_id',
+        field: 'pubkey',
         type: 'string',
         required: false,
-        desc: { zh: '(可选) 只返回与指定 peer_id 建立的通道；省略则返回所有通道', en: '(Optional) Only return channels with specified peer_id; omit to return all channels' },
+        desc: { zh: '(可选) 只返回与指定 pubkey 建立的通道；省略则返回所有通道', en: '(Optional) Only return channels with specified pubkey; omit to return all channels' },
       },
     ],
     returns: [
       { field: 'channels', type: 'Channel[]', desc: { zh: '通道数组', en: 'Channel array' } },
       { field: 'channels[].channel_id', type: 'hex string', desc: { zh: '通道唯一 ID', en: 'Channel unique ID' } },
-      { field: 'channels[].peer_id', type: 'string', desc: { zh: '对端节点 Peer ID', en: 'Counterparty node Peer ID' } },
+      { field: 'channels[].pubkey', type: 'string', desc: { zh: '对端节点公钥（hex-encoded secp256k1）', en: 'Counterparty node public key (hex-encoded secp256k1)' } },
       { field: 'channels[].local_balance', type: 'hex string', desc: { zh: '本地余额（shannon），支付后减少', en: 'Local balance (shannon), decreases after payment' } },
       { field: 'channels[].remote_balance', type: 'hex string', desc: { zh: '对端余额（shannon），收款后增加', en: 'Remote balance (shannon), increases after receiving' } },
-      { field: 'channels[].state.state_name', type: 'string', desc: { zh: '通道状态：CHANNEL_READY（可用）/ NEGOTIATING_FUNDING（等待链上确认）/ CLOSED（已关闭）', en: 'Channel state: CHANNEL_READY (available) / NEGOTIATING_FUNDING (waiting on-chain confirmation) / CLOSED (closed)' } },
+      { field: 'channels[].state.state_name', type: 'string', desc: { zh: '通道状态：ChannelReady（可用）/ AwaitingTxSignatures（等待链上确认）/ ChannelClosed（已关闭）', en: 'Channel state: ChannelReady (available) / AwaitingTxSignatures (waiting on-chain confirmation) / ChannelClosed (closed)' } },
     ],
     sdkExample: `import { getChannels } from '@/lib/fiber-client';
 

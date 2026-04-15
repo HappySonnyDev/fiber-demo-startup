@@ -23,18 +23,14 @@ export function useNodeStatus() {
         });
         setNodeStatus(statusMap);
 
-        // 提取 peer_id
+        // 提取 pubkey (v0.8.0+)
         const idMap: Record<string, string> = {};
         data.nodes.forEach((node: ApiNodeInfo) => {
           const info = node.info as Record<string, unknown> | null;
           if (info) {
-            const addresses = info['addresses'] as string[] | undefined;
-            if (addresses && addresses.length > 0) {
-              const match = addresses[0].match(/\/p2p\/([^/]+)$/);
-              if (match) { idMap[node.name] = match[1]; return; }
-            }
-            const id = (info['node_id'] || info['public_key'] || '') as string;
-            if (id) idMap[node.name] = id;
+            // 优先使用 pubkey 字段 (v0.8.0+)
+            const pubkey = (info['pubkey'] || info['public_key'] || '') as string;
+            if (pubkey) idMap[node.name] = pubkey;
           }
         });
         if (Object.keys(idMap).length > 0) {

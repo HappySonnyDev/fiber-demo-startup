@@ -7,7 +7,7 @@
 import React, { useState, useCallback, useEffect } from 'react';
 import { Plus, Box, Zap, Play, Activity } from 'lucide-react';
 import type { NodesState, Node, ApiNodeInfo, ChannelInfo, ChannelLineInfo, AssetType, PaymentState } from '@/types';
-import { INITIAL_NODES, FIBER_NODES, NODE_POSITIONS, CHANNEL_CHECK_DELAYS } from '@/constants';
+import { INITIAL_NODES, FIBER_NODES, NODE_POSITIONS, CHANNEL_CHECK_DELAYS, POLL_INTERVAL } from '@/constants';
 import { useI18n } from '@/lib/i18n';
 import { useNodeStatus } from '@/hooks/useNodeStatus';
 import { useChannels } from '@/hooks/useChannels';
@@ -45,6 +45,30 @@ export function DemoMode() {
   const [isOpeningChannel, setIsOpeningChannel] = useState(false);
   const [pendingChannels, setPendingChannels] = useState<Set<string>>(new Set());
   
+  // 通道轮询 ref
+  const channelsPollRef = React.useRef<NodeJS.Timeout | null>(null);
+  
+  // 启动通道轮询
+  const startChannelsPolling = useCallback(() => {
+    if (channelsPollRef.current) return;
+    channelsPollRef.current = setInterval(() => {
+      fetchChannels();
+    }, POLL_INTERVAL);
+  }, [fetchChannels]);
+  
+  // 停止通道轮询
+  const stopChannelsPolling = useCallback(() => {
+    if (channelsPollRef.current) {
+      clearInterval(channelsPollRef.current);
+      channelsPollRef.current = null;
+    }
+  }, []);
+  
+  // 组件卸载时清理
+  useEffect(() => {
+    return () => stopChannelsPolling();
+  }, [stopChannelsPolling]);
+  
   // 支付状态
   const [paymentState, setPaymentState] = useState<PaymentState>('idle');
   const [invoice, setInvoice] = useState('');
@@ -70,6 +94,7 @@ export function DemoMode() {
       if (allOnline) {
         setIsRunning(true);
         startPolling();
+        startChannelsPolling(); // 启动通道轮询
         fetchChannels();
         addLog('sys', 'System', 'ready', 'All nodes connected. Channels loaded.');
       } else {
@@ -80,13 +105,13 @@ export function DemoMode() {
     }).finally(() => {
       setIsConnecting(false);
     });
-  }, [addLog, fetchNodeStatus, fetchChannels, startPolling]);
+  }, [addLog, fetchNodeStatus, fetchChannels, startPolling, startChannelsPolling]);
 
   // 打开通道
   const handleOpenChannel = useCallback(async (fromNode: string, toNode: string, amount: string, assetType: AssetType) => {
     addLog('req', fromNode, 'open_channel', { to: toNode, amount, assetType });
     setIsOpeningChannel(true);
-    const channelKey = `${fromNode}-${toNode}`;
+    const channelKey = `${fromNode.toLowerCase()}-${toNode.toLowerCase()}`;
     
     try {
       const response = await fetch('/api/channels/open', {
@@ -101,7 +126,7 @@ export function DemoMode() {
       }
       
       if (data.success) {
-        addLog('res', fromNode, 'open_channel', { success: true, peerId: data.peerId, assetType: data.assetType });
+        addLog('res', fromNode, 'open_channel', { success: true, pubkey: data.pubkey, assetType: data.assetType });
         setPendingChannels(prev => new Set(prev).add(channelKey));
         
         CHANNEL_CHECK_DELAYS.forEach((delay) => {
@@ -109,18 +134,91 @@ export function DemoMode() {
             await fetchChannels();
             await fetchNodeStatus();
             
-            const channels = getChannelsBetween(fromNode, toNode, nodeIdMap);
-            const readyChannel = channels.find(ch => ch.isReady);
-            if (readyChannel) {
-              setPendingChannels(prev => {
-                const next = new Set(prev);
-                next.delete(channelKey);
-                return next;
-              });
-              addLog('sys', 'System', 'channel_ready', `${fromNode} → ${toNode} 通道已就绪`);
+            // 直接从 API 获取最新数据，避免闭包陷阱
+            try {
+              const [channelsRes, nodesRes] = await Promise.all([
+                fetch('/api/channels').then(r => r.json()),
+                fetch('/api/nodes').then(r => r.json()),
+              ]);
+              
+              // 构建最新的 nodeIdMap
+              const latestNodeIdMap: Record<string, string> = {};
+              if (nodesRes.nodes) {
+                nodesRes.nodes.forEach((node: { name: string; info?: { pubkey?: string } }) => {
+                  const pubkey = node.info?.pubkey;
+                  if (pubkey) latestNodeIdMap[node.name.toLowerCase()] = pubkey;
+                });
+              }
+              
+              // 检查通道状态
+              if (channelsRes.nodes) {
+                const fromNodeLower = fromNode.toLowerCase();
+                const toNodeLower = toNode.toLowerCase();
+                const aChannels = channelsRes.nodes.find((n: { name: string }) => n.name.toLowerCase() === fromNodeLower)?.channels || [];
+                const bId = latestNodeIdMap[toNodeLower];
+                const readyChannel = aChannels.find((ch: { pubkey?: string; state?: { state_name?: string } }) => 
+                  ch.pubkey === bId && ch.state?.state_name === 'ChannelReady'
+                );
+                
+                if (readyChannel) {
+                  setPendingChannels(prev => {
+                    const next = new Set(prev);
+                    next.delete(channelKey);
+                    return next;
+                  });
+                  addLog('sys', 'System', 'channel_ready', `${fromNode} → ${toNode} 通道已就绪`);
+                }
+              }
+            } catch (e) {
+              console.error('Error checking channel status:', e);
             }
           }, delay);
         });
+        
+        // 额外轮询：每5秒检查一次，直到通道就绪或超过2分钟
+        const pollInterval = setInterval(async () => {
+          try {
+            const [channelsRes, nodesRes] = await Promise.all([
+              fetch('/api/channels').then(r => r.json()),
+              fetch('/api/nodes').then(r => r.json()),
+            ]);
+            
+            const latestNodeIdMap: Record<string, string> = {};
+            if (nodesRes.nodes) {
+              nodesRes.nodes.forEach((node: { name: string; info?: { pubkey?: string } }) => {
+                const pubkey = node.info?.pubkey;
+                if (pubkey) latestNodeIdMap[node.name.toLowerCase()] = pubkey;
+              });
+            }
+            
+            if (channelsRes.nodes) {
+              const fromNodeLower = fromNode.toLowerCase();
+              const toNodeLower = toNode.toLowerCase();
+              const aChannels = channelsRes.nodes.find((n: { name: string }) => n.name.toLowerCase() === fromNodeLower)?.channels || [];
+              const bId = latestNodeIdMap[toNodeLower];
+              const readyChannel = aChannels.find((ch: { pubkey?: string; state?: { state_name?: string } }) => 
+                ch.pubkey === bId && ch.state?.state_name === 'ChannelReady'
+              );
+              
+              if (readyChannel) {
+                setPendingChannels(prev => {
+                  const next = new Set(prev);
+                  next.delete(channelKey);
+                  return next;
+                });
+                addLog('sys', 'System', 'channel_ready', `${fromNode} → ${toNode} 通道已就绪`);
+                clearInterval(pollInterval);
+              }
+            }
+          } catch (e) {
+            console.error('Error polling channel status:', e);
+          }
+        }, 5000);
+        
+        // 2分钟后停止轮询
+        setTimeout(() => {
+          clearInterval(pollInterval);
+        }, 120000);
       } else {
         throw new Error(data.error);
       }
@@ -129,7 +227,7 @@ export function DemoMode() {
     } finally {
       setIsOpeningChannel(false);
     }
-  }, [addLog, addRpcEntry, fetchChannels, fetchNodeStatus, getChannelsBetween, nodeIdMap]);
+  }, [addLog, addRpcEntry, fetchChannels, fetchNodeStatus, getChannelsBetween]);
 
   // 关闭通道
   const handleCloseChannel = useCallback(async (nodeName: string, channelId: string) => {
@@ -235,15 +333,16 @@ export function DemoMode() {
     }
   }, [isRunning, invoice, selectedNode, payTarget, assetType, payAmount, addLog, addRpcEntry, fetchChannels]);
 
-  // 根据 peer_id 查找节点名称
-  const findNodeNameByPeerId = useCallback((peerId: string): string => {
+  // 根据 pubkey 查找节点名称
+  const findNodeNameByPubkey = useCallback((pubkey: string): string => {
     for (const [name, id] of Object.entries(nodeIdMap)) {
-      if (id === peerId) return name;
+      if (id === pubkey) return name;
     }
     for (const name of FIBER_NODES) {
-      if (nodeStatus[name]?.info?.node_id === peerId) return name;
+      const info = nodeStatus[name]?.info as { pubkey?: string } | null;
+      if (info?.pubkey === pubkey) return name;
     }
-    return peerId.substring(0, 12) + '...';
+    return pubkey.substring(0, 12) + '...';
   }, [nodeIdMap, nodeStatus]);
 
   // 选择节点
@@ -310,7 +409,7 @@ export function DemoMode() {
         onCreateInvoice={handleCreateInvoice}
         onPayInvoice={handlePayInvoice}
         onDeselectNode={() => { setSelectedNode(null); setPaymentState('idle'); setInvoice(''); }}
-        findNodeNameByPeerId={findNodeNameByPeerId}
+        findNodeNameByPubkey={findNodeNameByPubkey}
       />
 
       {/* 画布 */}
@@ -350,10 +449,47 @@ export function DemoMode() {
               ['bob', 'charlie'],
               ['alice', 'charlie'],
             ].map(([a, b]) => {
-              const channelInfos = getChannelsBetween(a, b, nodeIdMap);
-              if (channelInfos.length === 0) return null;
+              // 直接使用 channels 状态，确保数据最新
+              const aChannels = channels[a] || [];
+              const bChannels = channels[b] || [];
+              const bId = nodeIdMap[b];
+              const aId = nodeIdMap[a];
+              
+              if (aChannels.length === 0 || bChannels.length === 0) return null;
+              if (!bId || !aId) return null;
+              
               const posA = NODE_POSITIONS[a];
               const posB = NODE_POSITIONS[b];
+              
+              // 收集通道信息
+              const channelInfos: ChannelLineInfo[] = [];
+              const seenChannelIds = new Set<string>();
+              
+              // 从 A 的通道中找与 B 的通道
+              aChannels.forEach(ch => {
+                if (ch.pubkey === bId && ch.channel_id && !seenChannelIds.has(ch.channel_id)) {
+                  seenChannelIds.add(ch.channel_id);
+                  channelInfos.push({
+                    hasChannel: true,
+                    isUdt: !!ch.funding_udt_type_script,
+                    isReady: ch.state?.state_name === 'ChannelReady'
+                  });
+                }
+              });
+              
+              // 从 B 的通道中找与 A 的通道
+              bChannels.forEach(ch => {
+                if (ch.pubkey === aId && ch.channel_id && !seenChannelIds.has(ch.channel_id)) {
+                  seenChannelIds.add(ch.channel_id);
+                  channelInfos.push({
+                    hasChannel: true,
+                    isUdt: !!ch.funding_udt_type_script,
+                    isReady: ch.state?.state_name === 'ChannelReady'
+                  });
+                }
+              });
+              
+              if (channelInfos.length === 0) return null;
               
               // 为同一对节点之间的多条通道画多条线（使用曲线偏移区分）
               return channelInfos.map((info, idx) => {
@@ -369,18 +505,31 @@ export function DemoMode() {
                 
                 return (
                   <g key={`${a}-${b}-${idx}`}>
+                    {/* 背景线 - 未就绪时显示虚线动画 */}
                     <path
                       d={`M ${posA.x} ${posA.y} Q ${controlX} ${controlY} ${posB.x} ${posB.y}`}
                       fill="none"
                       stroke={info.isUdt ? "#a855f7" : "#f97316"}
                       strokeWidth="3"
-                    />
+                      strokeDasharray={info.isReady ? "0" : "8 4"}
+                      opacity={info.isReady ? 1 : 0.5}
+                    >
+                      {!info.isReady && (
+                        <animate
+                          attributeName="stroke-dashoffset"
+                          from="24"
+                          to="0"
+                          dur="1s"
+                          repeatCount="indefinite"
+                        />
+                      )}
+                    </path>
+                    {/* 前景高亮线 */}
                     <path
                       d={`M ${posA.x} ${posA.y} Q ${controlX} ${controlY} ${posB.x} ${posB.y}`}
                       fill="none"
                       stroke={info.isUdt ? "#c084fc" : "#fb923c"}
                       strokeWidth="1"
-                      strokeDasharray={info.isReady ? "0" : "4 4"}
                       opacity="0.6"
                     />
                   </g>
